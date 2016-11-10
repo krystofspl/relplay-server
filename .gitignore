@@ -1,0 +1,13 @@
+.DS_Store
+node_modules/
+dist/
+npm-debug.log
+build/Release
+.npm
+.eslintcache
+.node_repl_history
+logs
+*.log
+.idea
+*.sublime-project
+*.sublime-workspace
