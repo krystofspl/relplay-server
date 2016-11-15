@@ -2,13 +2,18 @@
   "name": "gml-back",
   "version": "1.0.0",
   "description": "",
-  "main": "app.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "main": "src/app.js",
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.14.0"
-  }
+    "body-parser": "^1.15.2",
+    "express": "^4.14.0",
+    "jsmediatags": "^3.3.0",
+    "node-uuid": "^1.4.7",
+    "recursive-readdir": "^2.1.0",
+    "seraph": "^0.15.2",
+    "seraph-model": "^0.9.1",
+    "synchronize": "^2.0.0"
+  },
+  "devDependencies": {}
 }
