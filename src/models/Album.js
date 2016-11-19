@@ -7,7 +7,7 @@ Album.schema = {
   year: {type: Number, min: 1000, max: 5000},
   comments: {type: String},
   artworkPath: {type: String},
-  inInbox: {type: Boolean, required: true, default: true}
+  inInbox: {type: Boolean, default: true}
 }
 Album.useTimestamps()
 module.exports = Album
