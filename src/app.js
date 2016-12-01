@@ -21,35 +21,87 @@ var Track = require('./models/Track.js')
 var Album = require('./models/Album.js')
 var Artist = require('./models/Artist.js')
 
-//--------------------------------------------------------------------------------- ROUTES
-
-app.get('/', function (req, res) {
-  res.send('Hello World!')
+// CORS
+app.use(function(req, res, next) {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  next()
 })
 
-app.get('/artists/:id', function (req, res) {
-  var id = req.params.id
-  var artistData = {}
-  Artist.read(id, function (err, artist) {
-    artistData = artist
-  })
-  res.json(artistData)
-})
-
-app.get('/artists', function (req, res) {
-  var artistsData = []
-  Artist.findAll(function (err, artists) {
-    artistsData = artists
-  })
-  res.json(artistsData)
-})
-
+//TODO move to helper
 function safeString(str) {
   return '' + str
 }
 
-app.get('/rescan', function (req, res) {  
-  //TODO ??! make this responsive, scanning may be long, show progress, inform the user, prevent double scanning(adding)
+//--------------------------------------------------------------------------------- ROUTES
+
+// ENTITY ROUTES
+
+app.get('/artists/:id', function (req, res) {
+  var id = req.params.id
+  Artist.where(id, function (err, artist) {
+    res.json(artist)
+  })
+})
+
+app.get('/artists', function (req, res) {
+  Artist.findAll(function (err, artists) {
+    //artists.forEach(artist => {if(artist.albums) artist.albums = artist.albums.map(album => album.id)})
+    res.json(artists)
+  })
+})
+
+app.get('/albums', function (req, res) {
+  //TODO only include artist IDs, this is redundant
+  Album.compose(Artist, 'artists', 'HAS_ARTIST', {many: true})
+  Album.compose(Artist, 'artists', 'DIRTY_HAS_ARTIST', {many: true})
+  Album.findAll(function (err, albums) {
+    albums.forEach(album => {if(album.artists) album.artists = album.artists.map(artist => artist.id)})
+    res.json(albums)
+  })
+})
+
+app.get('/tracks', function (req, res) {
+  Track.compose(Album, 'album', 'HAS_ALBUM')
+  Track.compose(Album, 'album', 'DIRTY_HAS_ALBUM')
+  Track.findAll(function (err, tracks) {
+    tracks.forEach(track => {if(track.album) track.album = track.album.id})
+    res.json(tracks)
+  })
+})
+
+// GRAPH ROUTES
+
+app.get('/graphs/artist-albums-graph', (req, res) => {
+  var artist = req.query.artist
+  if (!artist) {
+    res.status(400).send('Artist id parameter ("artist") must be present.')
+    return
+  }
+  var query = '\
+    MATCH (mainArtist:Artist)<-[rel]-(album:Album) \
+    WHERE ID(mainArtist) = {id} AND (type(rel) = "HAS_ARTIST" OR type(rel) = "DIRTY_HAS_ARTIST") \
+    WITH album, mainArtist \
+    MATCH (artist:Artist)<-[rel]-(album:Album) \
+    WHERE (type(rel) = "HAS_ARTIST" OR type(rel) = "DIRTY_HAS_ARTIST") \
+    RETURN ID(album) as album, \
+    CASE ID(artist) \
+      WHEN ID(mainArtist) THEN ID(mainArtist) \
+      ELSE ID(artist) \
+    END as artist, \
+    CASE ID(artist) \
+      WHEN ID(mainArtist) THEN true \
+      ELSE false \
+    END as primary \
+    '
+  db.query(query, {id: parseInt(artist)}, (err, result) => {
+    console.log(err)
+    res.json(result)
+  })
+})
+
+app.get('/rescan', function (req, res) {
+  //TODO??! make this responsive, scanning may be long, show progress, inform the user, prevent double scanning(adding)
   var recursive = require('recursive-readdir')
   var mediaTags = require('audio-metadata')
   var fs = require('fs')
@@ -72,8 +124,11 @@ app.get('/rescan', function (req, res) {
       var files = sync.await(recursive(libraryPath, [], sync.defer()))
       var tx = db.batch()
       Track.db = tx
+
+      //TODO do this in batches for large imports?
       files.forEach(file => {
-        if(!['mp3', 'flac'].includes(file.split('.').pop().toLowerCase()) || !file) {return}
+        //TODO more formats, change the tag reader for a more universal one
+        if(!['mp3'].includes(file.split('.').pop().toLowerCase()) || !file) {return}
         if(!(file in oldData.tracks)) {
           var tag = mediaTags.id3v1(fs.readFileSync(file))
           if (!tag) {return}
@@ -83,7 +138,7 @@ app.get('/rescan', function (req, res) {
               trackId: uuid.v4(),
               title: safeString(tag.title),
               trackNr: safeString(tag.track).replace(/(^\d+)(.+$)/i,'$1'),
-              filePath: file                  
+              filePath: file
             }, (err, track) => {
               newDataDb.tracks[safeString(track.trackId)] = track
               //TODO assuming there are no two albums with the same name during the import
@@ -95,13 +150,11 @@ app.get('/rescan', function (req, res) {
             })
           } catch (err) {
             console.log(err)
-          }          
+          }
         }
       })
       Track.db = db
       sync.await(tx.commit(sync.defer()))
-
-      console.log(newData)
 
       var tx = db.batch()
       Album.db = tx
@@ -133,16 +186,15 @@ app.get('/rescan', function (req, res) {
       Object.keys(newData.relationships).forEach(relationship => {
         var rel = newData.relationships[relationship]
         if(rel.type == 'DIRTY_HAS_ARTIST') {
-          tx.relate(newDataDb.albums[rel.from].id, 'DIRTY_HAS_ARTIST', newDataDb.artists[rel.to].id)
+          tx.relate(newDataDb.albums[rel.from].id, 'DIRTY_HAS_ARTIST', newDataDb.artists[rel.to].id, {main: true})
         } else {
           tx.relate(newDataDb.tracks[rel.from].id, 'DIRTY_HAS_ALBUM', newDataDb.albums[rel.to].id)
-        }        
-      })      
-      sync.await(tx.commit(sync.defer())) 
+        }
+      })
+      sync.await(tx.commit(sync.defer()))
     })
   } catch (err) {
     console.log(err)
-  } finally {
   }
   res.send('scanned')
 })
