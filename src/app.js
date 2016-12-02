@@ -61,6 +61,17 @@ app.get('/albums', function (req, res) {
   })
 })
 
+app.get('/album-art/:id', function (req, res) {
+  db.query('MATCH (t:Track)-[:DIRTY_HAS_ALBUM|:HAS_ALBUM]->(a:Album) WHERE ID(a) = {id} RETURN t.filePath as path LIMIT 1', {id: parseInt(req.params.id)}, function (err, result) {
+    if (result && result.length > 0) {
+      res.set('Content-Type', 'image/jpeg')
+      res.sendFile(path.resolve(path.join(path.dirname(result[0].path), 'folder.jpg')));
+    } else {
+      res.status(404).send('Not found');
+    }
+  })
+})
+
 app.get('/tracks', function (req, res) {
   Track.compose(Album, 'album', 'HAS_ALBUM')
   Track.compose(Album, 'album', 'DIRTY_HAS_ALBUM')
