@@ -7,7 +7,7 @@ global.db = require('seraph')({
   pass: 'password'
 })
 //global.libraryPath = '/home/krystof/Code/School/graph_music_library/library/'
-global.libraryPath = '/mnt/G/Hudba/Ef'
+global.libraryPath = '/mnt/G/Hudba/Caspian'
 var fs = require('fs')
 var path = require('path')
 
@@ -53,18 +53,27 @@ app.get('/artists', function (req, res) {
 
 app.get('/albums', function (req, res) {
   //TODO only include artist IDs, this is redundant
+  Album.compose(Artist, 'mainArtist', 'HAS_MAIN_ARTIST')
   Album.compose(Artist, 'artists', 'HAS_ARTIST', {many: true})
-  Album.compose(Artist, 'artists', 'DIRTY_HAS_ARTIST', {many: true})
   Album.findAll(function (err, albums) {
-    albums.forEach(album => {if(album.artists) album.artists = album.artists.map(artist => artist.id)})
+    albums.forEach(album => {if(album.mainArtist) album.mainArtist = album.mainArtist.id})
+    albums.forEach(album => {
+      if(album.artists){
+        album.artists = album.artists.map(artist => artist.id)
+      } else {
+        album.artists = []
+      }
+    })
     res.json(albums)
   })
 })
 
 app.get('/album-art/:id', function (req, res) {
-  db.query('MATCH (t:Track)-[:DIRTY_HAS_ALBUM|:HAS_ALBUM]->(a:Album) WHERE ID(a) = {id} RETURN t.filePath as path LIMIT 1', {id: parseInt(req.params.id)}, function (err, result) {
+  db.query('MATCH (t:Track)-[:HAS_ALBUM]->(a:Album) WHERE ID(a) = {id} RETURN t.filePath as path LIMIT 1', {id: parseInt(req.params.id)}, function (err, result) {
     if (result && result.length > 0) {
       res.set('Content-Type', 'image/jpeg')
+      // TODO? compress?
+      // TODO look for other jpgs
       res.sendFile(path.resolve(path.join(path.dirname(result[0].path), 'folder.jpg')));
     } else {
       res.status(404).send('Not found');
@@ -74,7 +83,6 @@ app.get('/album-art/:id', function (req, res) {
 
 app.get('/tracks', function (req, res) {
   Track.compose(Album, 'album', 'HAS_ALBUM')
-  Track.compose(Album, 'album', 'DIRTY_HAS_ALBUM')
   Track.findAll(function (err, tracks) {
     tracks.forEach(track => {if(track.album) track.album = track.album.id})
     res.json(tracks)
@@ -89,12 +97,13 @@ app.get('/graphs/artist-albums-graph', (req, res) => {
     res.status(400).send('Artist id parameter ("artist") must be present.')
     return
   }
+  // Query for (mainArtist)<-(albums)<-?-(otherArtists)
   var query = '\
     MATCH (mainArtist:Artist)<-[rel]-(album:Album) \
-    WHERE ID(mainArtist) = {id} AND (type(rel) = "HAS_ARTIST" OR type(rel) = "DIRTY_HAS_ARTIST") \
+    WHERE ID(mainArtist) = {id} AND (type(rel) = "HAS_MAIN_ARTIST") \
     WITH album, mainArtist \
     MATCH (artist:Artist)<-[rel]-(album:Album) \
-    WHERE (type(rel) = "HAS_ARTIST" OR type(rel) = "DIRTY_HAS_ARTIST") \
+    WHERE (type(rel) = "HAS_ARTIST") \
     RETURN ID(album) as album, \
     CASE ID(artist) \
       WHEN ID(mainArtist) THEN ID(mainArtist) \
@@ -156,8 +165,8 @@ app.get('/rescan', function (req, res) {
               //TODO year
               newData.albums[safeString(tag.album)] = null
               newData.artists[safeString(tag.artist)] = null
-              newData.relationships[safeString(track.trackId)] = newData.relationships[safeString(track.trackId)] || {from: safeString(track.trackId), to: safeString(tag.album), type: 'DIRTY_HAS_ALBUM'}
-              newData.relationships[safeString(tag.album)] = newData.relationships[safeString(tag.album)] || {from: safeString(tag.album), to: safeString(tag.artist), type: 'DIRTY_HAS_ARTIST'}
+              newData.relationships[safeString(track.trackId)] = newData.relationships[safeString(track.trackId)] || {from: safeString(track.trackId), to: safeString(tag.album), type: 'HAS_ALBUM'}
+              newData.relationships[safeString(tag.album)] = newData.relationships[safeString(tag.album)] || {from: safeString(tag.album), to: safeString(tag.artist), type: 'HAS_MAIN_ARTIST'}
             })
           } catch (err) {
             console.log(err)
@@ -196,10 +205,10 @@ app.get('/rescan', function (req, res) {
       var tx = db.batch()
       Object.keys(newData.relationships).forEach(relationship => {
         var rel = newData.relationships[relationship]
-        if(rel.type == 'DIRTY_HAS_ARTIST') {
-          tx.relate(newDataDb.albums[rel.from].id, 'DIRTY_HAS_ARTIST', newDataDb.artists[rel.to].id, {main: true})
+        if(rel.type == 'HAS_MAIN_ARTIST') {
+          tx.relate(newDataDb.albums[rel.from].id, 'HAS_MAIN_ARTIST', newDataDb.artists[rel.to].id, {main: true})
         } else {
-          tx.relate(newDataDb.tracks[rel.from].id, 'DIRTY_HAS_ALBUM', newDataDb.albums[rel.to].id)
+          tx.relate(newDataDb.tracks[rel.from].id, 'HAS_ALBUM', newDataDb.albums[rel.to].id)
         }
       })
       sync.await(tx.commit(sync.defer()))
@@ -208,6 +217,47 @@ app.get('/rescan', function (req, res) {
     console.log(err)
   }
   res.send('scanned')
+})
+
+app.post('/albums/:id', function (req, res) {
+  // TODO currently has no validation, verification etc
+  var request = req.body
+  var nodeData = {
+    id: request.id
+  }
+  if(request.title) {nodeData.title = request.title}
+  if(typeof request.inInbox !== 'undefined') {nodeData.inInbox = request.inInbox}
+
+  sync.fiber(function () {
+    var album = null
+    if(Object.keys(nodeData).length >= 2) {
+      album = sync.await(Album.update(nodeData, sync.defer()))
+    } else {
+      Album.compose(Artist, 'mainArtist', 'HAS_MAIN_ARTIST')
+      Album.compose(Artist, 'artists', 'HAS_ARTIST', {many: true})
+      album = sync.await(Album.where(request.id, sync.defer()))
+    }
+    if(album.mainArtist) {album.mainArtist = album.mainArtist.id}
+    if(album.artists) {
+      album.artists = album.artists.map(artist => artist.id)
+    } else {
+      album.artists = []
+    }
+    if(request.mainArtist) {
+      sync.await(db.query('MATCH (album:Album)-[r:HAS_MAIN_ARTIST]->(Artist) WHERE ID(album)={id} DELETE r', {id: parseInt(request.id)}, sync.defer()))
+      sync.await(db.relate(request.id, 'HAS_MAIN_ARTIST', request.mainArtist, sync.defer()))
+      album.mainArtist = request.mainArtist
+    }
+    if(request.artists && request.artists.length >= 1) {
+      sync.await(db.query('MATCH (album:Album)-[r:HAS_ARTIST]->(Artist) WHERE ID(album)={id} DELETE r', {id: parseInt(request.id)}, sync.defer()))
+      request.artists.forEach(artistId => {
+        sync.await(db.relate(request.id, 'HAS_ARTIST', artistId, sync.defer()))
+        album.artists.push(artistId)
+      })
+    }
+    res.status(200).json(album)
+  })
+
 })
 
 //---------------------------------------------------------------------------------

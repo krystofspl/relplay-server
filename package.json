@@ -6,6 +6,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "audio-metadata": "^0.3.0",
     "body-parser": "^1.15.2",
     "express": "^4.14.0",
     "jsmediatags": "^3.3.0",
