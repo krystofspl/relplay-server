@@ -7,7 +7,7 @@ global.db = require('seraph')({
   pass: 'password'
 })
 //global.libraryPath = '/home/krystof/Code/School/graph_music_library/library/'
-global.libraryPath = '/mnt/G/Hudba/Caspian'
+global.libraryPath = '/mnt/G/Hudba/Wayne Shorter'
 var fs = require('fs')
 var path = require('path')
 
@@ -68,6 +68,26 @@ app.get('/albums', function (req, res) {
   })
 })
 
+app.get('/albums/:id', function (req, res) {
+  var query = ' \
+    MATCH (album:Album)-[rel]->(mainArtist:Artist) \
+    WHERE ID(album) = {id} AND (TYPE(rel) = "HAS_MAIN_ARTIST") \
+    WITH album, mainArtist \
+    OPTIONAL MATCH (album)-[rel:HAS_ARTIST*]->(artist:Artist) \
+    RETURN album, ID(mainArtist) as mainArtist, collect(ID(artist)) as artists \
+  '
+  db.query(query, {id: parseInt(req.params.id)}, function (err, album) {
+    console.log(err)
+    if(album.mainArtist) {album.mainArtist = album.mainArtist.id}
+    if(album.artists) {
+      album.artists = album.artists.map(artist => artist.id)
+    } else {
+      album.artists = []
+    }
+    res.json(album)
+  })
+})
+
 app.get('/album-art/:id', function (req, res) {
   db.query('MATCH (t:Track)-[:HAS_ALBUM]->(a:Album) WHERE ID(a) = {id} RETURN t.filePath as path LIMIT 1', {id: parseInt(req.params.id)}, function (err, result) {
     if (result && result.length > 0) {
@@ -100,14 +120,15 @@ app.get('/graphs/artist-albums-graph', (req, res) => {
   // Query for (mainArtist)<-(albums)<-?-(otherArtists)
   var query = '\
     MATCH (mainArtist:Artist)<-[rel]-(album:Album) \
-    WHERE ID(mainArtist) = {id} AND (type(rel) = "HAS_MAIN_ARTIST") \
+    WHERE ID(mainArtist) = {id} AND (type(rel) = "HAS_MAIN_ARTIST" OR type(rel)="HAS_ARTIST") \
     WITH album, mainArtist \
-    MATCH (artist:Artist)<-[rel]-(album:Album) \
-    WHERE (type(rel) = "HAS_ARTIST") \
+    MATCH (artist:Artist)<-[rel]-(album) \
+    WHERE (type(rel) = "HAS_MAIN_ARTIST" OR type(rel)="HAS_ARTIST") \
     RETURN ID(album) as album, \
     CASE ID(artist) \
       WHEN ID(mainArtist) THEN ID(mainArtist) \
-      ELSE ID(artist) \
+      WHEN ID(artist) THEN ID(artist) \
+      ELSE ID(mainArtist) \
     END as artist, \
     CASE ID(artist) \
       WHEN ID(mainArtist) THEN true \
@@ -227,37 +248,66 @@ app.post('/albums/:id', function (req, res) {
   }
   if(request.title) {nodeData.title = request.title}
   if(typeof request.inInbox !== 'undefined') {nodeData.inInbox = request.inInbox}
-
   sync.fiber(function () {
-    var album = null
-    if(Object.keys(nodeData).length >= 2) {
-      album = sync.await(Album.update(nodeData, sync.defer()))
-    } else {
-      Album.compose(Artist, 'mainArtist', 'HAS_MAIN_ARTIST')
-      Album.compose(Artist, 'artists', 'HAS_ARTIST', {many: true})
-      album = sync.await(Album.where(request.id, sync.defer()))
-    }
-    if(album.mainArtist) {album.mainArtist = album.mainArtist.id}
-    if(album.artists) {
-      album.artists = album.artists.map(artist => artist.id)
-    } else {
-      album.artists = []
-    }
-    if(request.mainArtist) {
-      sync.await(db.query('MATCH (album:Album)-[r:HAS_MAIN_ARTIST]->(Artist) WHERE ID(album)={id} DELETE r', {id: parseInt(request.id)}, sync.defer()))
-      sync.await(db.relate(request.id, 'HAS_MAIN_ARTIST', request.mainArtist, sync.defer()))
-      album.mainArtist = request.mainArtist
-    }
-    if(request.artists && request.artists.length >= 1) {
-      sync.await(db.query('MATCH (album:Album)-[r:HAS_ARTIST]->(Artist) WHERE ID(album)={id} DELETE r', {id: parseInt(request.id)}, sync.defer()))
-      request.artists.forEach(artistId => {
-        sync.await(db.relate(request.id, 'HAS_ARTIST', artistId, sync.defer()))
-        album.artists.push(artistId)
-      })
+    try {
+      var album = null
+      var newMainArtist = null
+      var newArtists = null
+
+      // Take relationship data from the request, if present
+      if (request.mainArtist) {newMainArtist = request.mainArtist; delete request.mainArtist}
+      if (request.artists) {newArtists = request.artists; delete request.artists}
+
+      // Update album if there's some data present
+      if(Object.keys(nodeData).length >= 2) {
+        sync.await(Album.update(nodeData, sync.defer()))
+      }
+
+      // Obtain new album
+      var query = ' \
+        MATCH (album:Album)-[rel]->(mainArtist:Artist) \
+        WHERE ID(album) = {id} AND (TYPE(rel) = "HAS_MAIN_ARTIST") \
+        WITH album, mainArtist \
+        OPTIONAL MATCH (album)-[rel:HAS_ARTIST*]->(artist:Artist) \
+        RETURN album, ID(mainArtist) as mainArtist, collect(ID(artist)) as artists \
+      '
+      result = sync.await(db.query(query, {id: parseInt(req.params.id)}, sync.defer()))
+      if(result.length < 1) {throw 'No album with id ' + req.params.id}
+      result = result[0]
+      album = result.album // result is [{album:.., mainArtist: int, artists: int[]}]
+      if(result.mainArtist) {album.mainArtist = result.mainArtist} // map mainArtist to its id
+      if(result.artists) { // map artists to its ids or return []
+        album.artists = result.artists
+      } else {
+        album.artists = []
+      }
+
+      // Update and set new mainArtist if present
+      if(newMainArtist) {
+        // Delete old main artist rel
+        sync.await(db.query('MATCH (album:Album)-[r:HAS_MAIN_ARTIST]->(Artist) WHERE ID(album)={id} DELETE r', {id: parseInt(request.id)}, sync.defer()))
+        // Add new main artist rel
+        sync.await(db.relate(request.id, 'HAS_MAIN_ARTIST', newMainArtist, sync.defer()))
+        album.mainArtist = newMainArtist
+      }
+
+      // Update and set new artists if present
+      if(newArtists && newArtists.length >= 1) {
+        // Delete old artists rels
+        sync.await(db.query('MATCH (album:Album)-[r:HAS_ARTIST]->(Artist) WHERE ID(album)={id} DELETE r', {id: parseInt(request.id)}, sync.defer()))
+        // Add new artists rels
+        album.artists = []
+        // TODO transaction
+        newArtists.forEach(artistId => {
+          sync.await(db.relate(request.id, 'HAS_ARTIST', artistId, sync.defer()))
+          album.artists.push(artistId)
+        })
+      }
+    } catch (err) {
+      console.log(err)
     }
     res.status(200).json(album)
   })
-
 })
 
 //---------------------------------------------------------------------------------
