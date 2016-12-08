@@ -141,6 +141,22 @@ app.get('/graphs/artist-albums-graph', (req, res) => {
   })
 })
 
+app.get('/graphs/artists-artists-graph', (req, res) => {
+  // Query for (artist)<-[similarity]-(artist)
+  var query = '\
+    MATCH (artist:Artist) \
+    WITH (artist) \
+    OPTIONAL MATCH (artist)-[:SIMILAR_TO]->(artist2:Artist) \
+    RETURN ID(artist) as artist, collect(ID(artist2)) as rels \
+    '
+  db.query(query, {}, (err, result) => {
+    console.log(err)
+    res.json(result)
+  })
+})
+
+// MISC ROUTES
+
 app.get('/rescan', function (req, res) {
   //TODO??! make this responsive, scanning may be long, show progress, inform the user, prevent double scanning(adding)
   var recursive = require('recursive-readdir')
@@ -240,6 +256,41 @@ app.get('/rescan', function (req, res) {
   res.send('scanned')
 })
 
+// TODO change to URI
+app.post('/relationships/artist-similarity/add', function (req, res) {
+  var edge = req.body.edge
+  var artist1 = parseInt(edge.from)
+  var artist2 = parseInt(edge.to)
+  if (artist1 && artist2) {
+    db.relate(artist1, 'SIMILAR_TO', artist2, (err, result) => {
+      // TODO err
+      console.log(err)
+      res.status(200).json(result)
+    })
+  }
+})
+
+// TODO change to DELETE+URI
+app.post('/relationships/artist-similarity/delete', function (req, res) {
+  var edge = req.body.edge
+  var artist1 = parseInt(edge.from)
+  var artist2 = parseInt(edge.to)
+  if (artist1 && artist2) {
+    // TODO err
+    var query = ' \
+      MATCH (artist1:Artist)-[r:SIMILAR_TO]-(artist2:Artist) \
+      WHERE (ID(artist1) = {id1} AND ID(artist2) = {id2}) OR (ID(artist1) = {id2} AND ID(artist2) = {id1}) \
+      DELETE r \
+    '
+    db.query(query, {id1: artist1, id2: artist2}, (err, result) => {
+      console.log(err)
+      res.status(200).json(result)
+    })
+
+  }
+})
+
+// TODO change to PUT
 app.post('/albums/:id', function (req, res) {
   // TODO currently has no validation, verification etc
   var request = req.body
