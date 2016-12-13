@@ -20,6 +20,7 @@ var sync = require('synchronize')
 var Track = require('./models/Track.js')
 var Album = require('./models/Album.js')
 var Artist = require('./models/Artist.js')
+var Genre = require('./models/Genre.js')
 
 // CORS
 app.use(function(req, res, next) {
@@ -37,13 +38,6 @@ function safeString(str) {
 
 // ENTITY ROUTES
 
-app.get('/artists/:id', function (req, res) {
-  var id = req.params.id
-  Artist.where(id, function (err, artist) {
-    res.json(artist)
-  })
-})
-
 app.get('/artists', function (req, res) {
   Artist.findAll(function (err, artists) {
     //artists.forEach(artist => {if(artist.albums) artist.albums = artist.albums.map(album => album.id)})
@@ -52,10 +46,13 @@ app.get('/artists', function (req, res) {
 })
 
 app.get('/albums', function (req, res) {
-  //TODO only include artist IDs, this is redundant
-  Album.compose(Artist, 'mainArtist', 'HAS_MAIN_ARTIST')
-  Album.compose(Artist, 'artists', 'HAS_ARTIST', {many: true})
-  Album.findAll(function (err, albums) {
+  //TODO! only include artist IDs, this is redundant
+  sync.fiber(() => {
+    Album.compose(Artist, 'mainArtist', 'HAS_MAIN_ARTIST')
+    Album.compose(Artist, 'artists', 'HAS_ARTIST', {many: true})
+    // TODO compose Genre throws cypher null pointer, bug on seraph-model's side?
+
+    var albums = sync.await(Album.findAll(sync.defer()))
     albums.forEach(album => {if(album.mainArtist) album.mainArtist = album.mainArtist.id})
     albums.forEach(album => {
       if(album.artists){
@@ -64,7 +61,39 @@ app.get('/albums', function (req, res) {
         album.artists = []
       }
     })
+    // Get genres
+    albums.forEach(album => {
+      var genres = sync.await(db.query('MATCH (album:Album)-[:HAS_GENRE]->(genre:Genre) WHERE ID(album) = {albumId} return genre', {albumId: album.id}, sync.defer()))
+      if(genres){
+        album.genres = genres.map(genre => genre.id)
+      } else {
+        album.genres = []
+      }
+    })
     res.json(albums)
+  })
+})
+
+app.get('/genres', function (req, res) {
+  sync.fiber(() => {
+    var genres = sync.await(Genre.findAll(sync.defer()))
+    genres.forEach(genre => {
+      var parentGenres = sync.await(db.query('MATCH (genre:Genre)-[:HAS_PARENT_GENRE]->(parentGenre:Genre) WHERE ID(genre) = {genreId} return parentGenre', {genreId: genre.id}, sync.defer()))
+      if (parentGenres.length){
+        genre.parentGenre = parentGenres[0].id
+      } else {
+        genre.parentGenre = null
+      }
+    })
+    res.json(genres)
+  })
+})
+
+app.get('/tracks', function (req, res) {
+  Track.compose(Album, 'album', 'HAS_ALBUM')
+  Track.findAll(function (err, tracks) {
+    tracks.forEach(track => {if(track.album) track.album = track.album.id})
+    res.json(tracks)
   })
 })
 
@@ -74,17 +103,20 @@ app.get('/albums/:id', function (req, res) {
     WHERE ID(album) = {id} AND (TYPE(rel) = "HAS_MAIN_ARTIST") \
     WITH album, mainArtist \
     OPTIONAL MATCH (album)-[rel:HAS_ARTIST*]->(artist:Artist) \
-    RETURN album, ID(mainArtist) as mainArtist, collect(ID(artist)) as artists \
+    WITH album, artist, mainArtist \
+    OPTIONAL MATCH (album)-[:HAS_GENRE*]->(genre:Genre) \
+    RETURN album, ID(mainArtist) as mainArtist, collect(ID(artist)) as artists, collect(ID(genre)) as genres \
   '
   db.query(query, {id: parseInt(req.params.id)}, function (err, album) {
     console.log(err)
-    if(album.mainArtist) {album.mainArtist = album.mainArtist.id}
-    if(album.artists) {
-      album.artists = album.artists.map(artist => artist.id)
-    } else {
-      album.artists = []
-    }
     res.json(album)
+  })
+})
+
+app.get('/artists/:id', function (req, res) {
+  var id = req.params.id
+  Artist.where(id, function (err, artist) {
+    res.json(artist)
   })
 })
 
@@ -98,14 +130,6 @@ app.get('/album-art/:id', function (req, res) {
     } else {
       res.status(404).send('Not found');
     }
-  })
-})
-
-app.get('/tracks', function (req, res) {
-  Track.compose(Album, 'album', 'HAS_ALBUM')
-  Track.findAll(function (err, tracks) {
-    tracks.forEach(track => {if(track.album) track.album = track.album.id})
-    res.json(tracks)
   })
 })
 
@@ -145,7 +169,7 @@ app.get('/graphs/albums-albums-graph', (req, res) => {
   // Query for (album)<-[similarity]-(album)
   var query = '\
     MATCH (album:Album) \
-    WITH (album) \
+    WITH album \
     OPTIONAL MATCH (album)-[:SIMILAR_TO]->(album2:Album) \
     RETURN ID(album) as album, collect(ID(album2)) as rels \
     '
@@ -159,7 +183,7 @@ app.get('/graphs/artists-artists-graph', (req, res) => {
   // Query for (artist)<-[similarity]-(artist)
   var query = '\
     MATCH (artist:Artist) \
-    WITH (artist) \
+    WITH artist \
     OPTIONAL MATCH (artist)-[:SIMILAR_TO]->(artist2:Artist) \
     RETURN ID(artist) as artist, collect(ID(artist2)) as rels \
     '
@@ -167,6 +191,32 @@ app.get('/graphs/artists-artists-graph', (req, res) => {
     console.log(err)
     res.json(result)
   })
+})
+
+app.get('/graphs/genres-albums-graph', (req, res) => {
+  // Query for (genre)<-[HAS_GENRE]<-(album)
+  var query = '\
+    MATCH (genre:Genre) \
+    WITH genre \
+    OPTIONAL MATCH (genre)<-[:HAS_GENRE]-(album:Album) \
+    WITH genre, album \
+    OPTIONAL MATCH (genre)<-[:HAS_PARENT_GENRE]-(parentGenre:Genre) \
+    RETURN ID(genre) as genre, collect(ID(album)) as rels, ID(parentGenre) as parentGenre \
+  '
+  db.query(query, {}, (err, result) => {
+    console.log(err)
+    res.json(result)
+  })
+})
+
+app.get('/graphs/labels-graph', (req, res) => {
+  // Query for (label)<-[HAS_LABEL]<-(...)
+  var query = '\
+    MATCH (label:Label) \
+    WITH (label) \
+    OPTIONAL MATCH (label)<-[:HAS_LABEL]-(n) \
+    RETURN ID(label) as label, collect(ID(n)) as rels \
+  '
 })
 
 // MISC ROUTES
@@ -351,23 +401,29 @@ app.post('/albums/:id', function (req, res) {
       var album = null
       var newMainArtist = null
       var newArtists = null
+      var newGenres = null
 
       // Take relationship data from the request, if present
       if (request.mainArtist) {newMainArtist = request.mainArtist; delete request.mainArtist}
       if (request.artists) {newArtists = request.artists; delete request.artists}
-
+      if (request.genres) {newGenres = request.genres; delete request.genres}
       // Update album if there's some data present
       if(Object.keys(nodeData).length >= 2) {
         sync.await(Album.update(nodeData, sync.defer()))
       }
 
+      //TODO! use nodeData instead of request
+
       // Obtain new album
+      // TODO use a synchronous function like getAlbum instead
       var query = ' \
         MATCH (album:Album)-[rel]->(mainArtist:Artist) \
         WHERE ID(album) = {id} AND (TYPE(rel) = "HAS_MAIN_ARTIST") \
         WITH album, mainArtist \
-        OPTIONAL MATCH (album)-[rel:HAS_ARTIST*]->(artist:Artist) \
-        RETURN album, ID(mainArtist) as mainArtist, collect(ID(artist)) as artists \
+        OPTIONAL MATCH (album)-[:HAS_ARTIST*]->(artist:Artist) \
+        WITH album, artist, mainArtist \
+        OPTIONAL MATCH (album)-[:HAS_GENRE*]->(genre:Genre) \
+        RETURN album, ID(mainArtist) as mainArtist, collect(ID(artist)) as artists, collect(ID(genre)) as genres \
       '
       result = sync.await(db.query(query, {id: parseInt(req.params.id)}, sync.defer()))
       if(result.length < 1) {throw 'No album with id ' + req.params.id}
@@ -378,6 +434,11 @@ app.post('/albums/:id', function (req, res) {
         album.artists = result.artists
       } else {
         album.artists = []
+      }
+      if(result.genres) { // map genres to its ids or return []
+        album.genres = result.genres
+      } else {
+        album.genres = []
       }
 
       // Update and set new mainArtist if present
@@ -390,7 +451,7 @@ app.post('/albums/:id', function (req, res) {
       }
 
       // Update and set new artists if present
-      if(newArtists && newArtists.length >= 1) {
+      if(newArtists) {
         // Delete old artists rels
         sync.await(db.query('MATCH (album:Album)-[r:HAS_ARTIST]->(Artist) WHERE ID(album)={id} DELETE r', {id: parseInt(request.id)}, sync.defer()))
         // Add new artists rels
@@ -401,10 +462,79 @@ app.post('/albums/:id', function (req, res) {
           album.artists.push(artistId)
         })
       }
+
+      // Update and set new genres if present
+      if(newGenres) {
+        // Delete old genre rels
+        sync.await(db.query('MATCH (album:Album)-[r:HAS_GENRE]->(Genre) WHERE ID(album)={id} DELETE r', {id: parseInt(request.id)}, sync.defer()))
+        // Add new genre rels
+        album.genres = []
+        // TODO transaction
+        newGenres.forEach(genreId => {
+          sync.await(db.relate(request.id, 'HAS_GENRE', genreId, sync.defer()))
+          album.genres.push(genreId)
+        })
+      }
     } catch (err) {
       console.log(err)
     }
     res.status(200).json(album)
+  })
+})
+
+// TODO change to PUT
+app.post('/genres/:id', function (req, res) {
+  // TODO currently has no validation, verification etc
+  var request = req.body
+  var nodeData = {}
+  if(request.id) {nodeData.id = request.id}
+  if(request.title) {nodeData.title = request.title}
+  if(request.description) {nodeData.description = request.description}
+  if(request.color) {nodeData.color = request.color}
+  if(request.parentGenre) {nodeData.parentGenre = request.parentGenre}
+  sync.fiber(function () {
+    try {
+      var genre = null
+      var newParentGenre = null
+
+      // Take relationship data from the request, if present
+      if (nodeData.parentGenre) {newParentGenre = nodeData.parentGenre; delete nodeData.mainArtist}
+
+      // Create new genre if there's no ID present
+      if (!Object.keys(nodeData).includes('id')) {
+        genre = sync.await(Genre.save(nodeData, sync.defer()))
+      }
+      // Update genre if there's some data present
+      if (Object.keys(nodeData).includes('id') && Object.keys(nodeData).length >= 2) {
+        genre = sync.await(Genre.update(nodeData, sync.defer()))
+      }
+
+      // Obtain new genre along with its parentGenre
+      var query = ' \
+        MATCH (genre:Genre) \
+        WHERE ID(genre) = {id} \
+        WITH genre \
+        OPTIONAL MATCH (genre)-[rel:HAS_PARENT_GENRE]->(genre2:Genre) \
+        RETURN genre, ID(genre2) as parentGenre \
+      '
+      result = sync.await(db.query(query, {id: parseInt(genre.id)}, sync.defer()))
+      if(result.length < 1) {throw 'No genre with id ' + genre.id}
+      result = result[0]
+      genre = result.genre // result is [{genre:.., parentGenre: int}]
+      if(result.parentGenre) {genre.parentGenre = result.parentGenre} // map parentGenre to its id
+
+      // Update and set new parentGenre if present
+      if(newParentGenre) {
+        // Delete old parent genre rel
+        sync.await(db.query('MATCH (genre:Genre)-[r:HAS_PARENT_GENRE]->(genre2:Genre) WHERE ID(genre)={id} DELETE r', {id: parseInt(nodeData.id)}, sync.defer()))
+        // Add new parent genre rel
+        sync.await(db.relate(genre.id, 'HAS_PARENT_GENRE', newParentGenre, sync.defer()))
+        genre.parentGenre = newParentGenre
+      }
+    } catch (err) {
+      console.log(err)
+    }
+    res.status(200).json(genre)
   })
 })
 

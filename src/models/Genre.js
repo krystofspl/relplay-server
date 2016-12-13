@@ -1,10 +1,9 @@
 var model = require('seraph-model')
 
-var Genre = model(db, 'genre')
+var Genre = model(db, 'Genre')
 Genre.schema = {
-  name: {type: String, required: true},
-  otherNames: {type: Array},
+  title: {type: String},
   description: {type: String},
-  color: {type: String, required: true}
+  color: {type: String}
 }
 module.exports = Genre
