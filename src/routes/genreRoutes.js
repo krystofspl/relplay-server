@@ -16,18 +16,21 @@ app.get('/genres', function (req, res) {
   })
 })
 
-app.post('/genres', genreCreateUpdateRouteHandler)
+//app.post('/genres', genreCreateUpdateRouteHandler)
 
 app.patch('/genres/:id', function (req, res) {
   var request = req.body
   var nodeData = {}
-  if (req.params.id) {nodeData.id = parseInt(req.params.id)}
   if (request.title) {nodeData.title = request.title}
   if (request.description) {nodeData.description = request.description}
   if (request.color) {nodeData.color = request.color}
   if (request.parentGenre) {nodeData.parentGenre = request.parentGenre}
   sync.fiber(function () {
     try {
+      if (isNaN(parseInt(req.params.id)) || !sync.await(Genre.exists(parseInt(req.params.id), sync.defer()))) {
+        res.status(404).send('Genre with specified ID doesn\'t exist')
+        return
+      }
       var genre = null
       var newParentGenre = null
 
