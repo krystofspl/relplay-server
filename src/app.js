@@ -141,5 +141,5 @@ app.get('/rescan', function (req, res) {
 //---------------------------------------------------------------------------------
 
 app.listen(8079, function () {
-  console.log('Graph Music Library backend listening at localhost:8079!')
+  console.log('Graph Music Library backend listening at ' + global.serverAddr + '!')
 })

@@ -1,5 +1,6 @@
 // Set global vars here
 var config = {
+  serverAddr: 'http://localhost:8079/',
   db: require('seraph')({
     server: 'http://localhost:7474',
     user: 'neo4j',

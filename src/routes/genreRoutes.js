@@ -2,7 +2,10 @@ var Genre = require('../models/Genre.js')
 
 app.get('/genres', function (req, res) {
   sync.fiber(() => {
+    // Get genres
     var genres = sync.await(Genre.findAll(sync.defer()))
+
+    // Embed parentGenres
     genres.forEach(genre => {
       var parentGenresQuery = 'MATCH (genre:Genre)-[:HAS_PARENT_GENRE]->(parentGenre:Genre) WHERE ID(genre) = {genreId} return parentGenre'
       var parentGenres = sync.await(db.query(parentGenresQuery, {genreId: genre.id}, sync.defer()))
@@ -16,7 +19,79 @@ app.get('/genres', function (req, res) {
   })
 })
 
-//app.post('/genres', genreCreateUpdateRouteHandler)
+app.get('/genres/:id', function (req, res) {
+  sync.fiber(function () {
+    try {
+      if (isNaN(parseInt(req.params.id)) || !sync.await(Genre.exists(parseInt(req.params.id), sync.defer()))) {
+        res.status(404).send('Genre with specified ID doesn\'t exist')
+        return
+      }
+      var query = ' \
+        MATCH (genre:Genre) \
+        WHERE ID(genre) = {genreId} \
+        WITH (genre) \
+        OPTIONAL MATCH (genre)-[:HAS_PARENT_GENRE]->(parentGenre:Genre) \
+        RETURN genre, parentGenre \
+      '
+      var result = sync.await(db.query(query, {genreId: parseInt(req.params.id)}, sync.defer()))
+      result = result[0] // result is [{genre:.., parentGenre: int}]
+      var genre = result.genre
+
+      // Move the rels inside the genre JSON
+      genre.parentGenre = result.parentGenre
+      res.json(genre)
+    } catch (err) {
+      console.log(err)
+      res.status(500).json(err)
+    }
+  })
+})
+
+app.post('/genres', function (req, res) {
+  sync.fiber(function () {
+    try {
+      var nodeData = {}
+      var genre = null
+      var newParentGenre = null
+
+      var request = req.body
+      // Take attributes data from the request
+      if (request.title) {nodeData.title = request.title}
+      if (request.description) {nodeData.description = request.description}
+      if (request.color) {nodeData.color = request.color}
+      // TODO add validation with response if failed
+      // Take relationship data from the request, if present
+      if (request.parentGenre) {newParentGenre = request.parentGenre; delete request.parentGenre}
+
+      // Create genre
+      genre = sync.await(Genre.save(nodeData, sync.defer()))
+
+      // Obtain new genre along with relevant rels embedded
+      var query = ' \
+        MATCH (genre:Genre) \
+        WHERE ID(genre) = {id} \
+        RETURN genre \
+      '
+      result = sync.await(db.query(query, {id: parseInt(genre.id)}, sync.defer()))
+      if (result.length < 1) {
+        throw 'ERR: No genre with id ' + genre.id
+      }
+      genre = result[0]
+
+      // Create rels if requested
+      if (newParentGenre) {
+        sync.await(db.relate(genre.id, 'HAS_PARENT_GENRE', newParentGenre, sync.defer()))
+        genre.parentGenre = newParentGenre
+      }
+
+      res.status(201).location(global.serverAddr + 'genres/' + genre.id).end()
+      return
+    } catch (err) {
+      console.log(err)
+      res.status(500).json(err)
+    }
+  })
+})
 
 app.patch('/genres/:id', function (req, res) {
   sync.fiber(function () {
@@ -40,15 +115,9 @@ app.patch('/genres/:id', function (req, res) {
       // Take relationship data from the request, if present
       if (request.parentGenre) {newParentGenre = request.parentGenre; delete request.parentGenre}
 
-      // Create new genre if there's no ID present
-      /* if (!idPresent) {
-        genre = sync.await(Genre.save(nodeData, sync.defer()))
-      }
-      var idPresent = Object.keys(nodeData).includes('id')
-      */
       // Update genre if there's ID and some data present
       var argsCount = Object.keys(nodeData).length
-      if (idPresent && argsCount >= 2) {
+      if (argsCount >= 2) {
         sync.await(Genre.update(nodeData, sync.defer()))
       } else {
         res.status(422).send('No parameters supplied')
@@ -66,13 +135,11 @@ app.patch('/genres/:id', function (req, res) {
       result = sync.await(db.query(query, {id: parseInt(nodeData.id)}, sync.defer()))
       if (result.length < 1) {
         throw 'ERR: No genre with id ' + nodeData.id
-        res.status(500)
-        return
       }
       result = result[0]
 
       genre = result.genre // result is [{genre:.., parentGenre: int}]
-      if (result.parentGenre) {genre.parentGenre = result.parentGenre}
+      genre.parentGenre = result.parentGenre
 
       // Update related entities if requested
       var tx = db.batch()
@@ -85,10 +152,12 @@ app.patch('/genres/:id', function (req, res) {
         genre.parentGenre = newParentGenre
       }
       sync.await(tx.commit(sync.defer()))
+
+      res.json(genre)
+      return
     } catch (err) {
       console.log(err)
+      res.status(500).json(err)
     }
-
-    res.json(genre)
   })
 })

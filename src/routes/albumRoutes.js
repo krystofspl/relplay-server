@@ -57,6 +57,7 @@ app.get('/albums/:id', function (req, res) {
       res.json(sync.await(db.query(query, {id: parseInt(req.params.id)}, sync.defer())))
     } catch (err) {
       console.log(err)
+      res.status(500).json(err)
     }
   })
 
@@ -123,8 +124,6 @@ app.patch('/albums/:id', function (req, res) {
       result = sync.await(db.query(query, {id: parseInt(nodeData.id)}, sync.defer()))
       if (result.length < 1) {
         throw 'ERR: No album with id ' + nodeData.id
-        res.status(500)
-        return
       }
       result = result[0]
 
@@ -174,10 +173,12 @@ app.patch('/albums/:id', function (req, res) {
         })
       }
       sync.await(tx.commit(sync.defer()))
+
+      res.json(album)
+      return
     } catch (err) {
       console.log(err)
+      res.status(500).json(err)
     }
-
-    res.json(album)
   })
 })
