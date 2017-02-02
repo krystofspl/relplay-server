@@ -121,7 +121,11 @@ app.patch('/albums/:id', function (req, res) {
         RETURN album, ID(mainArtist) as mainArtist, collect(DISTINCT ID(artist)) as artists, collect(DISTINCT ID(genre)) as genres \
       '
       result = sync.await(db.query(query, {id: parseInt(nodeData.id)}, sync.defer()))
-      if (result.length < 1) {throw 'No album with id ' + nodeData.id}
+      if (result.length < 1) {
+        throw 'ERR: No album with id ' + nodeData.id
+        res.status(500)
+        return
+      }
       result = result[0]
 
       album = result.album // result is [{album:.., mainArtist: int, artists: int[], genres: int[]}]

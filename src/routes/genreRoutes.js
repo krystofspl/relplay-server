@@ -19,42 +19,43 @@ app.get('/genres', function (req, res) {
 //app.post('/genres', genreCreateUpdateRouteHandler)
 
 app.patch('/genres/:id', function (req, res) {
-  var request = req.body
-  var nodeData = {}
-  if (request.title) {nodeData.title = request.title}
-  if (request.description) {nodeData.description = request.description}
-  if (request.color) {nodeData.color = request.color}
-  if (request.parentGenre) {nodeData.parentGenre = request.parentGenre}
   sync.fiber(function () {
     try {
       if (isNaN(parseInt(req.params.id)) || !sync.await(Genre.exists(parseInt(req.params.id), sync.defer()))) {
         res.status(404).send('Genre with specified ID doesn\'t exist')
         return
       }
+      var nodeData = {
+        id: parseInt(req.params.id)
+      }
       var genre = null
       var newParentGenre = null
 
+      var request = req.body
+      // Take attributes data from the request
+      if (request.title) {nodeData.title = request.title}
+      if (request.description) {nodeData.description = request.description}
+      if (request.color) {nodeData.color = request.color}
+      // TODO add validation with response if failed
       // Take relationship data from the request, if present
-      if (nodeData.parentGenre) {newParentGenre = nodeData.parentGenre; delete nodeData.mainArtist}
-
-      var idPresent = Object.keys(nodeData).includes('id')
-      var argsCount = Object.keys(nodeData).length
+      if (request.parentGenre) {newParentGenre = request.parentGenre; delete request.parentGenre}
 
       // Create new genre if there's no ID present
-      if (!idPresent) {
+      /* if (!idPresent) {
         genre = sync.await(Genre.save(nodeData, sync.defer()))
       }
+      var idPresent = Object.keys(nodeData).includes('id')
+      */
       // Update genre if there's ID and some data present
+      var argsCount = Object.keys(nodeData).length
       if (idPresent && argsCount >= 2) {
-        genre = sync.await(Genre.update(nodeData, sync.defer()))
-      }
-      // Not modified
-      if (idPresent && argsCount == 1) {
-        res.status(304).send('Not modified')
+        sync.await(Genre.update(nodeData, sync.defer()))
+      } else {
+        res.status(422).send('No parameters supplied')
         return
       }
 
-      // Obtain new genre along with its parentGenre
+      // Obtain new genre along with relevant rels embedded
       var query = ' \
         MATCH (genre:Genre) \
         WHERE ID(genre) = {id} \
@@ -62,23 +63,32 @@ app.patch('/genres/:id', function (req, res) {
         OPTIONAL MATCH (genre)-[rel:HAS_PARENT_GENRE]->(genre2:Genre) \
         RETURN genre, ID(genre2) as parentGenre \
       '
-      result = sync.await(db.query(query, {id: parseInt(genre.id)}, sync.defer()))
-
+      result = sync.await(db.query(query, {id: parseInt(nodeData.id)}, sync.defer()))
+      if (result.length < 1) {
+        throw 'ERR: No genre with id ' + nodeData.id
+        res.status(500)
+        return
+      }
       result = result[0]
+
       genre = result.genre // result is [{genre:.., parentGenre: int}]
       if (result.parentGenre) {genre.parentGenre = result.parentGenre}
 
+      // Update related entities if requested
+      var tx = db.batch()
       // Update and set new parentGenre if present
       if (newParentGenre) {
         // Delete old parent genre rel
-        sync.await(db.query('MATCH (genre:Genre)-[r:HAS_PARENT_GENRE]->(genre2:Genre) WHERE ID(genre)={id} DELETE r', {id: parseInt(nodeData.id)}, sync.defer()))
+        tx.query('MATCH (genre:Genre)-[r:HAS_PARENT_GENRE]->(genre2:Genre) WHERE ID(genre)={id} DELETE r', {id: parseInt(nodeData.id)})
         // Add new parent genre rel
-        sync.await(db.relate(genre.id, 'HAS_PARENT_GENRE', newParentGenre, sync.defer()))
+        tx.relate(genre.id, 'HAS_PARENT_GENRE', newParentGenre)
         genre.parentGenre = newParentGenre
       }
+      sync.await(tx.commit(sync.defer()))
     } catch (err) {
       console.log(err)
     }
-    res.status(200).json(genre)
+
+    res.json(genre)
   })
 })
