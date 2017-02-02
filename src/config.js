@@ -1,0 +1,12 @@
+// Set global vars here
+var config = {
+  db: require('seraph')({
+    server: 'http://localhost:7474',
+    user: 'neo4j',
+    pass: 'password'
+  }),
+  //'/home/krystof/Code/School/graph_music_library/library/'
+  libraryPath: '/mnt/G/Hudba/Led Zeppelin'
+}
+
+for (var c in config) global[c] = config[c]
