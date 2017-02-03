@@ -15,7 +15,7 @@ app.use(bodyParser.json())
 
 // Setup CORS
 app.use(corser.create({
-    methods: corser.simpleMethods.concat(["PUT", "PATCH"]),
+    methods: corser.simpleMethods.concat(["PUT", "PATCH", "DELETE"]),
     requestHeaders: corser.simpleRequestHeaders.concat(["X-Requested-With"])
 }))
 app.all('*', function(request, response, next) {

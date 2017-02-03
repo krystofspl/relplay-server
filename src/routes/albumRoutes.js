@@ -106,10 +106,10 @@ app.patch('/albums/:id', function (req, res) {
       var argsCount = Object.keys(nodeData).length
       if (argsCount >= 2) {
         sync.await(Album.update(nodeData, sync.defer()))
-      } else {
+      }/* else {
         res.status(422).send('No parameters supplied')
         return
-      }
+      }*/
 
       // Obtain the new album with relevant rels embedded
       var query = ' \

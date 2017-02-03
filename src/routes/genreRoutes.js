@@ -47,6 +47,30 @@ app.get('/genres/:id', function (req, res) {
   })
 })
 
+app.delete('/genres/:id', function (req, res) {
+  sync.fiber(function () {
+    try {
+      if (isNaN(parseInt(req.params.id)) || !sync.await(Genre.exists(parseInt(req.params.id), sync.defer()))) {
+        res.status(404).send('Genre with specified ID doesn\'t exist')
+        return
+      }
+
+      var query = ' \
+      MATCH (genre:Genre) \
+      WHERE ID(genre) = {id} \
+      WITH genre \
+      OPTIONAL MATCH (genre)-[r]-() \
+      DELETE r, genre \
+      '
+      sync.await(db.query(query, {id: parseInt(req.params.id)}, sync.defer()))
+      res.json(200).end()
+    } catch (err) {
+      console.log(err)
+      res.status(500).json(err)
+    }
+  })
+})
+
 app.post('/genres', function (req, res) {
   sync.fiber(function () {
     try {
@@ -84,7 +108,7 @@ app.post('/genres', function (req, res) {
         genre.parentGenre = newParentGenre
       }
 
-      res.status(201).location(global.serverAddr + 'genres/' + genre.id).end()
+      res.status(201).location(global.serverAddr + 'genres/' + genre.id).json(genre)
       return
     } catch (err) {
       console.log(err)
@@ -113,16 +137,16 @@ app.patch('/genres/:id', function (req, res) {
       if (request.color) {nodeData.color = request.color}
       // TODO add validation with response if failed
       // Take relationship data from the request, if present
-      if (request.parentGenre) {newParentGenre = request.parentGenre; delete request.parentGenre}
+      if ('parentGenre' in request) {newParentGenre = request.parentGenre; delete request.parentGenre}
 
       // Update genre if there's ID and some data present
       var argsCount = Object.keys(nodeData).length
       if (argsCount >= 2) {
         sync.await(Genre.update(nodeData, sync.defer()))
-      } else {
+      }/* else {
         res.status(422).send('No parameters supplied')
         return
-      }
+      }*/
 
       // Obtain new genre along with relevant rels embedded
       var query = ' \
@@ -147,8 +171,10 @@ app.patch('/genres/:id', function (req, res) {
       if (newParentGenre) {
         // Delete old parent genre rel
         tx.query('MATCH (genre:Genre)-[r:HAS_PARENT_GENRE]->(genre2:Genre) WHERE ID(genre)={id} DELETE r', {id: parseInt(nodeData.id)})
-        // Add new parent genre rel
-        tx.relate(genre.id, 'HAS_PARENT_GENRE', newParentGenre)
+        // Add new parent genre rel; if null, just delete
+        if (newParentGenre) {
+          tx.relate(genre.id, 'HAS_PARENT_GENRE', newParentGenre)
+        }
         genre.parentGenre = newParentGenre
       }
       sync.await(tx.commit(sync.defer()))
