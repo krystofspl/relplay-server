@@ -1,67 +1,123 @@
 
-// TODO change to URI
-app.post('/relationships/album-similarity/add', function (req, res) {
-  var edge = req.body.edge
-  var album1 = parseInt(edge.from)
-  var album2 = parseInt(edge.to)
-  if (album1 && album2) {
-    db.relate(album1, 'SIMILAR_TO', album2, (err, result) => {
-      // TODO err
-      console.log(err)
-      res.status(200).json(result)
+// Album similarity
+
+app.get('/relationships/album-similarity', function (req, res) {
+  try {
+    var query = ' \
+      MATCH (a:Album)-[r:SIMILAR_TO]-(b:Album) \
+      RETURN r \
+    '
+    db.query(query, {}, (err, result) => {
+      if (err) {throw err}
+      res.json(result)
     })
+  } catch (err) {
+    console.log(err)
+    res.status(500).json(err)
   }
 })
 
-// TODO change to DELETE+URI
-app.post('/relationships/album-similarity/delete', function (req, res) {
-  var edge = req.body.edge
-  var album1 = parseInt(edge.from)
-  var album2 = parseInt(edge.to)
-  if (album1 && album2) {
-    // TODO err
+app.post('/relationships/album-similarity', function (req, res) {
+  try {
+    var request = req.body
+    if (isNaN(parseInt(request.start)) || isNaN(parseInt(request.end))) {
+      res.status(422).send('Album IDs "start" and "end" must be specified.')
+      return
+    }
+    var start = parseInt(request.start)
+    var end = parseInt(request.end)
+    db.relate(start, 'SIMILAR_TO', end, {created: Date.now()}, (err, result) => {
+      if (err) throw err
+      res.status(201).json(result)
+    })
+  } catch (err) {
+    console.log(err)
+    res.status(500).json(err)
+  }
+})
+
+app.delete('/relationships/album-similarity/:start/:end', function (req, res) {
+  try {
+    var request = req.body
+    if (isNaN(parseInt(req.params.start)) || isNaN(parseInt(req.params.end))) {
+      res.status(422).send('Album IDs "start" and "end" must be specified.')
+      return
+    }
+    var start = parseInt(req.params.start)
+    var end = parseInt(req.params.end)
     var query = ' \
-      MATCH (album1:Album)-[r:SIMILAR_TO]-(album2:Album) \
-      WHERE (ID(album1) = {id1} AND ID(album2) = {id2}) OR (ID(album1) = {id2} AND ID(album2) = {id1}) \
+      MATCH (start:Album)-[r:SIMILAR_TO]-(end:Album) \
+      WHERE (ID(start) = {start} AND ID(end) = {end}) \
       DELETE r \
     '
-    db.query(query, {id1: album1, id2: album2}, (err, result) => {
-      console.log(err)
-      res.status(200).json(result)
+    db.query(query, {start: start, end: end}, (err, result) => {
+      if (err) throw err
+      res.status(200).end()
     })
+  } catch (err) {
+    console.log(err)
+    res.status(500).json(err)
   }
 })
 
-// TODO change to URI
-app.post('/relationships/artist-similarity/add', function (req, res) {
-  var edge = req.body.edge
-  var artist1 = parseInt(edge.from)
-  var artist2 = parseInt(edge.to)
-  if (artist1 && artist2) {
-    db.relate(artist1, 'SIMILAR_TO', artist2, (err, result) => {
-      // TODO err
-      console.log(err)
-      res.status(200).json(result)
-    })
-  }
-})
 
-// TODO change to DELETE+URI
-app.post('/relationships/artist-similarity/delete', function (req, res) {
-  var edge = req.body.edge
-  var artist1 = parseInt(edge.from)
-  var artist2 = parseInt(edge.to)
-  if (artist1 && artist2) {
-    // TODO err
+// Artist similarity
+
+app.get('/relationships/artist-similarity', function (req, res) {
+  try {
     var query = ' \
-      MATCH (artist1:Artist)-[r:SIMILAR_TO]-(artist2:Artist) \
-      WHERE (ID(artist1) = {id1} AND ID(artist2) = {id2}) OR (ID(artist1) = {id2} AND ID(artist2) = {id1}) \
+      MATCH (a:Artist)-[r:SIMILAR_TO]-(b:Artist) \
+      RETURN r \
+    '
+    db.query(query, {}, (err, result) => {
+      if (err) {throw err}
+      res.json(result)
+    })
+  } catch (err) {
+    console.log(err)
+    res.status(500).json(err)
+  }
+})
+
+app.post('/relationships/artist-similarity', function (req, res) {
+  try {
+    var request = req.body
+    if (isNaN(parseInt(request.start)) || isNaN(parseInt(request.end))) {
+      res.status(422).send('Artist IDs "start" and "end" must be specified.')
+      return
+    }
+    var start = parseInt(request.start)
+    var end = parseInt(request.end)
+    db.relate(start, 'SIMILAR_TO', end, {created: Date.now()}, (err, result) => {
+      if (err) throw err
+      res.status(201).json(result)
+    })
+  } catch (err) {
+    console.log(err)
+    res.status(500).json(err)
+  }
+})
+
+app.delete('/relationships/artist-similarity/:start/:end', function (req, res) {
+  try {
+    var request = req.body
+    if (isNaN(parseInt(req.params.start)) || isNaN(parseInt(req.params.end))) {
+      res.status(422).send('Artist IDs "start" and "end" must be specified.')
+      return
+    }
+    var start = parseInt(req.params.start)
+    var end = parseInt(req.params.end)
+    var query = ' \
+      MATCH (start:Artist)-[r:SIMILAR_TO]-(end:Artist) \
+      WHERE (ID(start) = {start} AND ID(end) = {end}) \
       DELETE r \
     '
-    db.query(query, {id1: artist1, id2: artist2}, (err, result) => {
-      console.log(err)
-      res.status(200).json(result)
+    db.query(query, {start: start, end: end}, (err, result) => {
+      if (err) throw err
+      res.status(200).end()
     })
-
+  } catch (err) {
+    console.log(err)
+    res.status(500).json(err)
   }
 })

@@ -25,6 +25,10 @@ app.all('*', function(request, response, next) {
     next();
 })
 
+process.on('uncaughtException', (err) => {
+  fs.writeSync(1, `Caught exception: ${JSON.stringify(err)}`);
+});
+
 
 //--------------------------------------------------------------------------------- ROUTES
 
