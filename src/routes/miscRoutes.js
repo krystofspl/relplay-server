@@ -1,10 +1,13 @@
+var Album = require('../models/Album.js')
+var Artist = require('../models/Artist.js')
+var Track = require('../models/Track.js')
+
 var rescanState = {
   status: 'done',
   newFiles: [],
   missingFiles: [],
   tracksAdded: [],
-  errMsg: null,
-  baf: null
+  errMsg: null
 }
 
 function checkStopCondition () {
@@ -45,7 +48,9 @@ function rescan () {
         MATCH (a:Album)-[:HAS_MAIN_ARTIST]-(artist:Artist) \
         RETURN ID(a) as id, a.title as title, ID(artist) as artist \
       '
-      sync.await(db.query(albumsQuery, sync.defer())).forEach(e => {
+      var albumsResult = sync.await(db.query(albumsQuery, sync.defer()))
+      for (i = 0; i < albumsResult.length; i++) {
+        var e = albumsResult[i]
         var albumNode = {
           id: e.id,
           artistId: e.artist
@@ -55,23 +60,29 @@ function rescan () {
         } else {
           albumsDB[e.title] = [albumNode]
         }
-      })
+      }
 
       var artistsQuery = ' \
         MATCH (a:Artist) \
         RETURN ID(a) as id, a.name as name \
       '
-      sync.await(db.query(artistsQuery, sync.defer())).forEach(e => {
+      var artistsResult = sync.await(db.query(artistsQuery, sync.defer()))
+      for (i = 0; i < artistsResult.length; i++) {
+        var e = artistsResult[i]
         artistsDB.idMapping[e.id] = {
           name: e.name
         }
         artistsDB.nameMapping[e.name] = {
           id: e.id
         }
-      })
+      }
       if (checkStopCondition()) { rescanState.status = 'stopped'; return }
 
       // Get new and missing files from the lists
+      _.remove(files, n => {
+        // TODO more formats
+        return n.split('.').reverse()[0].toLowerCase() != 'mp3'
+      })
       var pathsIntersection = _.intersection(files, trackPaths)
       _.remove(files, n => {
         return pathsIntersection.indexOf(n) != -1
@@ -86,24 +97,24 @@ function rescan () {
       if (checkStopCondition()) { rescanState.status = 'stopped'; return }
 
 
-      // Temporarily add new files as tracks, albums, artists and relationships
+      // Temporarily create new files as tracks, albums, artists and relationships
       // TODO? add checkStopCondition() inside the loop? this might take long
       var trackIdCounter = 0
       var albumIdCounter = 0
       var artistIdCounter = 0
-      newFiles.forEach(filePath => {
-        // TODO more formats
-        if(!['mp3'].includes(filePath.split('.').pop().toLowerCase()) || !filePath) { return }
+      for (i = 0; i < newFiles.length; i++) {
+        var filePath = newFiles[i]
         var currentFilePath = path.join(global.libraryPath, filePath)
 
         // Read ID tags from the music files
+        // TODO sometimes {"errno":-9,"code":"EBADF","syscall":"read"}
         var readStream = fs.createReadStream(currentFilePath)
         var metadata = sync.await(metadataReader(readStream, {duration: true}, sync.defer()))
         readStream.close()
 
         // Create a temporary representation of the data
         var newTrack = {
-          tempId: trackIdCounter,
+          tempId: 'temp'+trackIdCounter,
           title: metadata.title || filePath.split(path.sep).reverse()[0].replace(/\.[^\/.]+$/, ''),
           duration: metadata.duration || 0.0,
           filePath: filePath,
@@ -121,8 +132,9 @@ function rescan () {
         // If the track's album already is in DB, connect it
         if (albumsDB[album]) {
           // Two albums can have the same name but different artist, so we check for that too with a similarity method
-          albumsDB[album].forEach(albumItem => {
-            if (relCreated) return
+          for (j = 0; j < albumsDB[album].length; j++) {
+            var albumItem = albumsDB[album][j]
+            if (relCreated) break;
             if (stringSimilarity.compareTwoStrings(artist, artistsDB.idMapping[albumItem.artistId].name) > 0.8) {
               newData.rels.push({
                 from: newTrack.tempId,
@@ -131,13 +143,14 @@ function rescan () {
               })
               relCreated = true
             }
-          })
+          }
         }
         // If the track's album is not in DB but is an album already to be added, connect it
         if (!relCreated && newData.albums[album]) {
-          newData.albums[album].forEach(albumItem => {
+          for (j = 0; j < newData.albums[album].length; j++) {
+            var albumItem = newData.albums[album][j]
             if (stringSimilarity.compareTwoStrings(artist, newData.artists[albumItem.artistId].name) > 0.8) {
-              if (relCreated) return
+              if (relCreated) break;
               newData.rels.push({
                 from: newTrack.tempId,
                 to: albumItem.tempId,
@@ -145,26 +158,30 @@ function rescan () {
               })
               relCreated = true
             }
-          })
+          }
         }
         // Didn't find appropriate album => add album, artist and the connection
         if (!relCreated) {
           // Get/create artist
           var artistId = null
+          var artistTemporary = null
           if (artistsDB.nameMapping[artist]) {
             artistId = artistsDB.nameMapping[artist].id
+            artistTemporary = false // connecting with existing DB entity
           } else if (_.findKey(newData.artists, a => {return a.name === artist})) {
             artistId = _.findKey(newData.artists, a => {return a.name === artist})
+            artistTemporary = true // connecting with entity to be added to DB
           } else {
-            newData.artists[artistIdCounter] = {
+            newData.artists['temp'+artistIdCounter] = {
               name: artist
             }
-            artistId = artistIdCounter
+            artistId = 'temp'+artistIdCounter
+            artistTemporary = true // connecting with entity to be added to DB
             artistIdCounter++;
           }
           // Create temp album
           var albumNode = {
-            tempId: albumIdCounter,
+            tempId: 'temp'+albumIdCounter,
             artistId: artistId,
             year: metadata.year || 0
           }
@@ -185,18 +202,82 @@ function rescan () {
           newData.rels.push({
             from: albumNode.tempId,
             to: artistId,
-            type: 'HAS_MAIN_ARTIST'
+            type: 'HAS_MAIN_ARTIST',
+            temp: artistTemporary
           })
         }
-      })
+      }
       if (checkStopCondition()) { rescanState.status = 'stopped'; return }
 
-      //TODO temp
-      rescanState.baf = newData
 
       // Save new entities to DB
-
-      // add temp to new ID mapping
+      // TODO there might be a lot of new entities, split the transactions to batches by fixed size
+      var newOldIDsMapping = {
+        tracks: {},
+        albums: {},
+        artists: {}
+      }
+      // Save new artists and get their DB IDs
+      var tx = db.batch()
+      Artist.db = tx
+      for (i = 0; i < Object.keys(newData.artists).length; i++) {
+        var artist = Object.values(newData.artists)[i]
+        Artist.save({
+          name: artist.name
+        })
+      }
+      Artist.db = db
+      var savedArtists = _.flattenDeep(sync.await(tx.commit(sync.defer())))
+      for (i = 0; i < savedArtists.length; i++) {
+        var savedArtist = savedArtists[i]
+        var newID = savedArtist.id
+        var oldID = _.findKey(newData.artists, a => {return a.name === savedArtist.name})
+        if (oldID && newID) newOldIDsMapping.artists[oldID] = newID
+      }
+      // Save new albums and get their DB IDs
+      // TODO (solve if rescan too slow) ideally a transaction would be used, but then the received saved albums could have the same attributes but different ID (for albums with the same title, which might occur). that makes it hard to map the new IDs to the old for the creation of the rels
+      var albumTitles = Object.keys(newData.albums)
+      for (i = 0; i < albumTitles.length; i++) {
+        var albumTitle = albumTitles[i]
+        for (j = 0; j < newData.albums[albumTitle].length; j++) {
+          var album = newData.albums[albumTitle][j]
+          var savedAlbum = sync.await(Album.save({
+            title: albumTitle,
+            year: album.year
+          }, sync.defer()))
+          newOldIDsMapping.albums[album.tempId] = savedAlbum.id
+        }
+      }
+      // Save new tracks and get their DB IDs
+      // TODO (solve if rescan too slow) change to transaction(s)
+      for (i = 0; i < newData.tracks.length; i++) {
+        var track = newData.tracks[i]
+        var savedTrack = sync.await(Track.save({
+          filePath: track.filePath,
+          duration: track.duration,
+          title: track.title,
+          trackNr: track.trackNr
+        }, sync.defer()))
+        newOldIDsMapping.tracks[track.tempId] = savedTrack.id
+        rescanState.tracksAdded.push(savedTrack)
+      }
+      // Save rels
+      var tx = db.batch()
+      for (i = 0; i < newData.rels.length; i++) {
+        var rel = newData.rels[i]
+        var from, to
+        if (rel.type === 'HAS_ALBUM') {
+          // Tracks are always new, albums can be new or existing
+          from = newOldIDsMapping.tracks[rel.from]
+          to = newOldIDsMapping.albums[rel.to] || rel.to
+        } else if (rel.type === 'HAS_MAIN_ARTIST') {
+          // Both albums and artists can be new or existing
+          from = newOldIDsMapping.albums[rel.from] || rel.from
+          to = newOldIDsMapping.artists[rel.to] || rel.to
+        }
+        tx.relate(from, rel.type, to)
+      }
+      sync.await(tx.commit(sync.defer()))
 
       rescanState.status = 'done'
     } catch (err) {
@@ -237,105 +318,4 @@ app.put('/rescan', function (req, res) {
 
 app.get('/rescan', function (req, res) {
   res.json(rescanState)
-})
-
-
-app.get('/rescan', function (req, res) {
-  //TODO??! make this responsive, scanning may be long, show progress, inform the user, prevent double scanning(adding)
-  // Do in batches, might load new files initially, then add them in batches
-  var recursive = require('recursive-readdir')
-  var mediaTags = require('audio-metadata')
-  var fs = require('fs')
-
-  try {
-    var oldData = {}
-    var newData = {tracks: [], albums: {}, artists: {}, relationships: {}}
-    var newDataDb = {tracks: {}, albums: {}, artists: {}}
-    sync.fiber(function () {
-      //TODO only return needed attributes to save time & bandwidth
-      oldData.tracks = sync.await(Track.findAll(sync.defer())).reduce((map, obj) => {
-        map[obj.filePath] = {trackId: obj.trackId, id: obj.id}
-        return map
-      }, {})
-      oldData.artists = sync.await(Artist.findAll(sync.defer())).reduce((map, obj) => {
-        map[obj.name] = {artistId: obj.artistId, id: obj.id}
-        return map
-      }, {})
-
-      var files = sync.await(recursive(libraryPath, [], sync.defer()))
-      var tx = db.batch()
-      Track.db = tx
-
-      //TODO do this in batches for large imports?
-      files.forEach(file => {
-        //TODO more formats, change the tag reader for a more universal one
-        if(!['mp3'].includes(file.split('.').pop().toLowerCase()) || !file) {return}
-        if(!(file in oldData.tracks)) {
-          var tag = mediaTags.id3v1(fs.readFileSync(file))
-          if (!tag) {return}
-          //console.log(tag)
-          try {
-            Track.save({
-              trackId: uuid.v4(),
-              title: safeString(tag.title),
-              trackNr: safeString(tag.track).replace(/(^\d+)(.+$)/i,'$1'),
-              filePath: file
-            }, (err, track) => {
-              newDataDb.tracks[safeString(track.trackId)] = track
-              //TODO assuming there are no two albums with the same name during the import
-              //TODO year
-              newData.albums[safeString(tag.album)] = null
-              newData.artists[safeString(tag.artist)] = null
-              newData.relationships[safeString(track.trackId)] = newData.relationships[safeString(track.trackId)] || {from: safeString(track.trackId), to: safeString(tag.album), type: 'HAS_ALBUM'}
-              newData.relationships[safeString(tag.album)] = newData.relationships[safeString(tag.album)] || {from: safeString(tag.album), to: safeString(tag.artist), type: 'HAS_MAIN_ARTIST'}
-            })
-          } catch (err) {
-            console.log(err)
-          }
-        }
-      })
-      Track.db = db
-      sync.await(tx.commit(sync.defer()))
-
-      var tx = db.batch()
-      Album.db = tx
-      Object.keys(newData.albums).forEach(album => {
-        Album.save({
-          albumId: uuid.v4(),
-          title: album
-        }, function (err, album) {
-          newDataDb.albums[album.title] = album
-        })
-      })
-      Album.db = db
-      console.log(sync.await(tx.commit(sync.defer())))
-
-      var tx = db.batch()
-      Artist.db = tx
-      Object.keys(newData.artists).forEach(artist => {
-        Artist.save({
-          artistId: uuid.v4(),
-          name: artist
-        }, function (err, artist) {
-          newDataDb.artists[artist.name] = artist
-        })
-      })
-      Artist.db = db
-      sync.await(tx.commit(sync.defer()))
-
-      var tx = db.batch()
-      Object.keys(newData.relationships).forEach(relationship => {
-        var rel = newData.relationships[relationship]
-        if(rel.type === 'HAS_MAIN_ARTIST') {
-          tx.relate(newDataDb.albums[rel.from].id, 'HAS_MAIN_ARTIST', newDataDb.artists[rel.to].id, {main: true})
-        } else {
-          tx.relate(newDataDb.tracks[rel.from].id, 'HAS_ALBUM', newDataDb.albums[rel.to].id)
-        }
-      })
-      sync.await(tx.commit(sync.defer()))
-    })
-  } catch (err) {
-    console.log(err)
-  }
-  res.send('scanned')
 })

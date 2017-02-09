@@ -2,7 +2,6 @@ var model = require('seraph-model')
 
 var Track = model(db, 'Track')
 Track.schema = {
-  trackId: {type: String, required: true},
   title: {type: String, required: true},
   trackNr: {type: Number, min: 0},
   diskNr: {type: Number, min: 0},

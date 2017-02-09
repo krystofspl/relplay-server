@@ -7,7 +7,7 @@ var config = {
     pass: 'password'
   }),
   //'/home/krystof/Code/School/graph_music_library/library/'
-  libraryPath: '/mnt/G/Hudba'
+  libraryPath: '/mnt/G/mlib'
 }
 
 for (var c in config) global[c] = config[c]
