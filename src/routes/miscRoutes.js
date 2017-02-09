@@ -16,7 +16,7 @@ function checkStopCondition () {
 
 function rescan () {
   var recursive = require('recursive-readdir')
-  var metadataReader = require('musicmetadata')
+  var metadataReader = require('music-metadata')
   var fs = require('fs')
   var path = require('path')
   var _ = require('lodash')
@@ -34,9 +34,11 @@ function rescan () {
       }
 
       // Prepare file lists and arrays of entities stored in DB
+      console.log('[Rescan] Getting list of files from library directory')
       var files = sync.await(recursive(global.libraryPath, sync.defer()))
       files = files.map(file => {return file.replace(global.libraryPath, '')})
 
+      console.log('[Rescan] Getting list of track paths from DB')
       var tracksQuery = ' \
         MATCH (t:Track) \
         RETURN collect(distinct t.filePath) \
@@ -44,6 +46,7 @@ function rescan () {
       var trackPaths = sync.await(db.query(tracksQuery, sync.defer()))
       trackPaths = trackPaths[0].map(file => {return file.replace(global.libraryPath, '')})
 
+      console.log('[Rescan] Getting albums from DB')
       var albumsQuery = ' \
         MATCH (a:Album)-[:HAS_MAIN_ARTIST]-(artist:Artist) \
         RETURN ID(a) as id, a.title as title, ID(artist) as artist \
@@ -62,6 +65,7 @@ function rescan () {
         }
       }
 
+      console.log('[Rescan] Getting artists from DB')
       var artistsQuery = ' \
         MATCH (a:Artist) \
         RETURN ID(a) as id, a.name as name \
@@ -79,9 +83,10 @@ function rescan () {
       if (checkStopCondition()) { rescanState.status = 'stopped'; return }
 
       // Get new and missing files from the lists
+      console.log('[Rescan] Creating lists of new and missing files')
       _.remove(files, n => {
         // TODO more formats
-        return n.split('.').reverse()[0].toLowerCase() != 'mp3'
+        return !['mp3', 'flac'].includes(n.split('.').reverse()[0].toLowerCase())
       })
       var pathsIntersection = _.intersection(files, trackPaths)
       _.remove(files, n => {
@@ -102,6 +107,7 @@ function rescan () {
       var trackIdCounter = 0
       var albumIdCounter = 0
       var artistIdCounter = 0
+      console.log('[Rescan] Creating in-memory representation of new data')
       for (i = 0; i < newFiles.length; i++) {
         var filePath = newFiles[i]
         var currentFilePath = path.join(global.libraryPath, filePath)
@@ -109,23 +115,27 @@ function rescan () {
         // Read ID tags from the music files
         // TODO sometimes {"errno":-9,"code":"EBADF","syscall":"read"}
         var readStream = fs.createReadStream(currentFilePath)
-        var metadata = sync.await(metadataReader(readStream, {duration: true}, sync.defer()))
+        readStream.on('error', err => {
+          console.log(err)
+        })
+        var metadata = sync.await(metadataReader.parseStream(readStream, {duration: true}, sync.defer()))
         readStream.close()
 
         // Create a temporary representation of the data
         var newTrack = {
           tempId: 'temp'+trackIdCounter,
-          title: metadata.title || filePath.split(path.sep).reverse()[0].replace(/\.[^\/.]+$/, ''),
-          duration: metadata.duration || 0.0,
+          title: metadata.common.title || filePath.split(path.sep).reverse()[0].replace(/\.[^\/.]+$/, ''),
+          duration: metadata.format.duration || 0.0,
           filePath: filePath,
-          trackNr: metadata.track.no || 0
+          trackNr: metadata.common.track.no || 0,
+          diskNr: metadata.common.disk.no || 1
         }
         newData.tracks.push(newTrack)
         trackIdCounter++;
 
         // TODO? incorporate albumArtist?
-        var artist = metadata.artist[0] || filePath.split(path.sep).reverse()[2]
-        var album = metadata.album || filePath.split(path.sep).reverse()[1]
+        var artist = metadata.common.artist || filePath.split(path.sep).reverse()[2]
+        var album = metadata.common.album || filePath.split(path.sep).reverse()[1]
 
         // Try to connect the track to an album, create it if needed
         var relCreated = false
@@ -183,7 +193,7 @@ function rescan () {
           var albumNode = {
             tempId: 'temp'+albumIdCounter,
             artistId: artistId,
-            year: metadata.year || 0
+            year: metadata.common.year || 0
           }
           albumIdCounter++;
           if (newData.albums[album]) {
@@ -218,6 +228,7 @@ function rescan () {
         artists: {}
       }
       // Save new artists and get their DB IDs
+      console.log('[Rescan] Saving new artists to DB')
       var tx = db.batch()
       Artist.db = tx
       for (i = 0; i < Object.keys(newData.artists).length; i++) {
@@ -236,6 +247,7 @@ function rescan () {
       }
       // Save new albums and get their DB IDs
       // TODO (solve if rescan too slow) ideally a transaction would be used, but then the received saved albums could have the same attributes but different ID (for albums with the same title, which might occur). that makes it hard to map the new IDs to the old for the creation of the rels
+      console.log('[Rescan] Saving new albums to DB')
       var albumTitles = Object.keys(newData.albums)
       for (i = 0; i < albumTitles.length; i++) {
         var albumTitle = albumTitles[i]
@@ -250,18 +262,21 @@ function rescan () {
       }
       // Save new tracks and get their DB IDs
       // TODO (solve if rescan too slow) change to transaction(s)
+      console.log('[Rescan] Saving new tracks to DB')
       for (i = 0; i < newData.tracks.length; i++) {
         var track = newData.tracks[i]
         var savedTrack = sync.await(Track.save({
           filePath: track.filePath,
           duration: track.duration,
           title: track.title,
-          trackNr: track.trackNr
+          trackNr: track.trackNr,
+          diskNr: track.diskNr
         }, sync.defer()))
         newOldIDsMapping.tracks[track.tempId] = savedTrack.id
         rescanState.tracksAdded.push(savedTrack)
       }
       // Save rels
+      console.log('[Rescan] Saving new rels to DB')
       var tx = db.batch()
       for (i = 0; i < newData.rels.length; i++) {
         var rel = newData.rels[i]
@@ -309,7 +324,13 @@ app.put('/rescan', function (req, res) {
       res.status(102).json(rescanState)
       return
     } else {
-      rescanState.status = 'running'
+      rescanState = {
+        status: 'running',
+        newFiles: [],
+        missingFiles: [],
+        tracksAdded: [],
+        errMsg: null
+      }
       res.status(200).send('Rescan request was submitted.')
       rescan()
     }
@@ -318,4 +339,18 @@ app.put('/rescan', function (req, res) {
 
 app.get('/rescan', function (req, res) {
   res.json(rescanState)
+})
+
+app.get('/rescan-summary', function (req, res) {
+  var rescanStateSummary = {
+    status: rescanState.status,
+    newFilesCount: rescanState.newFiles.length,
+    missingFilesCount: rescanState.missingFiles.length,
+    tracksAddedCount: rescanState.tracksAdded.length,
+    errMsg: rescanState.errMsg
+  }
+  if (rescanStateSummary.newFilesCount > 0) {
+    rescanStateSummary.tracksAddedPercentage = Math.floor(rescanStateSummary.tracksAddedCount/rescanStateSummary.newFilesCount)*100+'%'
+  }
+  res.json(rescanStateSummary)
 })
