@@ -1,6 +1,8 @@
 var Album = require('../models/Album.js')
 var Artist = require('../models/Artist.js')
 var path = require('path')
+var fs = require('fs')
+var gm = require('gm')
 
 app.get('/albums', function (req, res) {
   //TODO only include artist IDs, this is redundant
@@ -63,16 +65,51 @@ app.get('/albums/:id', function (req, res) {
 
 })
 
-app.get('/album-art/:id', function (req, res) {
-  // TODO add 404, incorporate caching & compression
-  db.query('MATCH (t:Track)-[:HAS_ALBUM]->(a:Album) WHERE ID(a) = {id} RETURN t.filePath as path LIMIT 1', {id: parseInt(req.params.id)}, function (err, result) {
-    if (result && result.length > 0) {
-      res.set('Content-Type', 'image/jpeg')
-      // TODO compress? lookup in local dir cache?
-      // TODO look for other jpgs
-      res.sendFile(path.resolve(path.join(path.dirname(result[0].path), 'folder.jpg')));
-    } else {
-      res.status(404).send('Not found');
+app.get('/album-arts/:id', function (req, res) {
+  sync.fiber(function () {
+    try {
+      if (isNaN(parseInt(req.params.id)) || !sync.await(Album.exists(parseInt(req.params.id), sync.defer()))) {
+        res.status(404).send('Album with specified ID doesn\'t exist')
+        return
+      }
+
+      // TODO more formats/files?
+      var albumArtFileName = req.params.id + '.jpg'
+      var albumArtPath = path.join(path.join(global.appRoot, 'album-arts'), albumArtFileName)
+
+      if (fs.existsSync(albumArtPath)) {
+        res.set('Content-Type', 'image/jpeg')
+        res.sendFile(albumArtPath)
+        return
+      } else {
+        db.query('MATCH (t:Track)-[:HAS_ALBUM]->(a:Album) WHERE ID(a) = {id} RETURN t.filePath as path LIMIT 1', {id: parseInt(req.params.id)}, function (err, result) {
+          if (result && result.length > 0) {
+            var expectedImgPath = path.join(global.libraryPath, path.join(path.dirname(result[0].path), 'folder.jpg'))
+            if (fs.existsSync(expectedImgPath)) {
+              gm(expectedImgPath)
+              .resize(300, 300)
+              .write(albumArtPath, err => {
+                if (err) {
+                  throw err
+                } else {
+                  res.set('Content-Type', 'image/jpeg')
+                  res.sendFile(albumArtPath)
+                  return
+                }
+              })
+            } else {
+              res.status(404).send('Album art could not be found')
+              return
+            }
+          } else {
+            res.status(404).send('Album with specified ID doesn\'t exist')
+            return
+          }
+        })
+      }
+    } catch (err) {
+      console.log(err)
+      res.status(500).json(err)
     }
   })
 })

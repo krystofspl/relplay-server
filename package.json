@@ -10,6 +10,7 @@
     "body-parser": "^1.15.2",
     "corser": "^2.0.1",
     "express": "^4.14.0",
+    "gm": "^1.23.0",
     "jsmediatags": "^3.3.0",
     "music-metadata": "^0.6.1",
     "node-uuid": "^1.4.7",

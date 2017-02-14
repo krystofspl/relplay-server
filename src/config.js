@@ -1,3 +1,4 @@
+var path = require('path')
 // Set global vars here
 var config = {
   serverAddr: 'http://localhost:8079/',
@@ -7,7 +8,8 @@ var config = {
     pass: 'password'
   }),
   //'/home/krystof/Code/School/graph_music_library/library/'
-  libraryPath: '/mnt/G/Hudba/Bill Evans'
+  libraryPath: '/mnt/G/Hudba/',
+  appRoot: path.resolve(path.join(__dirname, '..'))
 }
 
 for (var c in config) global[c] = config[c]
