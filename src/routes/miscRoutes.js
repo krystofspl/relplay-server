@@ -7,11 +7,17 @@ var rescanState = {
   newFiles: [],
   missingFiles: [],
   tracksAdded: [],
-  errMsg: null
+  errMsg: null,
+  detailedStatusMsg: null
 }
 
 function checkStopCondition () {
   return rescanState.status === 'stop'
+}
+
+function setRescanMsg (msg) {
+  rescanState.detailedStatusMsg = msg
+  console.log('[Rescan] ' + msg)
 }
 
 function rescan () {
@@ -34,11 +40,11 @@ function rescan () {
       }
 
       // Prepare file lists and arrays of entities stored in DB
-      console.log('[Rescan] Getting list of files from library directory')
+      setRescanMsg('Getting list of files from library directory')
       var files = sync.await(recursive(global.libraryPath, sync.defer()))
       files = files.map(file => {return file.replace(global.libraryPath, '')})
 
-      console.log('[Rescan] Getting list of track paths from DB')
+      setRescanMsg('Getting list of track paths from DB')
       var tracksQuery = ' \
         MATCH (t:Track) \
         RETURN collect(distinct t.filePath) \
@@ -46,7 +52,7 @@ function rescan () {
       var trackPaths = sync.await(db.query(tracksQuery, sync.defer()))
       trackPaths = trackPaths[0].map(file => {return file.replace(global.libraryPath, '')})
 
-      console.log('[Rescan] Getting albums from DB')
+      setRescanMsg('Getting albums from DB')
       var albumsQuery = ' \
         MATCH (a:Album)-[:HAS_MAIN_ARTIST]-(artist:Artist) \
         RETURN ID(a) as id, a.title as title, ID(artist) as artist \
@@ -65,7 +71,7 @@ function rescan () {
         }
       }
 
-      console.log('[Rescan] Getting artists from DB')
+      setRescanMsg('Getting artists from DB')
       var artistsQuery = ' \
         MATCH (a:Artist) \
         RETURN ID(a) as id, a.name as name \
@@ -83,7 +89,7 @@ function rescan () {
       if (checkStopCondition()) { rescanState.status = 'stopped'; return }
 
       // Get new and missing files from the lists
-      console.log('[Rescan] Creating lists of new and missing files')
+      setRescanMsg('Creating lists of new and missing files')
       _.remove(files, n => {
         // TODO more formats
         return !['mp3', 'flac'].includes(n.split('.').reverse()[0].toLowerCase())
@@ -107,19 +113,24 @@ function rescan () {
       var trackIdCounter = 0
       var albumIdCounter = 0
       var artistIdCounter = 0
-      console.log('[Rescan] Creating in-memory representation of new data')
-      for (i = 0; i < newFiles.length; i++) {
+      setRescanMsg('Creating in-memory representation of new data')
+      // TODO temp condition for testing i < 5000
+      for (i = 0; i < newFiles.length && i < 5000; i++) {
         var filePath = newFiles[i]
         var currentFilePath = path.join(global.libraryPath, filePath)
 
-        // Read ID tags from the music files
-        // TODO sometimes {"errno":-9,"code":"EBADF","syscall":"read"}
-        var readStream = fs.createReadStream(currentFilePath)
-        readStream.on('error', err => {
+        console.log('[Rescan] Grabbing metadata for ' + currentFilePath)
+        try {
+          // Read ID tags from the music files
+          var readStream = fs.createReadStream(currentFilePath)
+          readStream.on('error', err => {
+            console.log(err)
+          })
+          var metadata = sync.await(metadataReader.parseStream(readStream, {duration: true}, sync.defer()))
+        } catch (err) {
           console.log(err)
-        })
-        var metadata = sync.await(metadataReader.parseStream(readStream, {duration: true}, sync.defer()))
-        readStream.close()
+          continue
+        }
 
         // Create a temporary representation of the data
         var newTrack = {
@@ -228,7 +239,7 @@ function rescan () {
         artists: {}
       }
       // Save new artists and get their DB IDs
-      console.log('[Rescan] Saving new artists to DB')
+      setRescanMsg('Saving new artists to DB')
       var tx = db.batch()
       Artist.db = tx
       for (i = 0; i < Object.keys(newData.artists).length; i++) {
@@ -247,7 +258,7 @@ function rescan () {
       }
       // Save new albums and get their DB IDs
       // TODO (solve if rescan too slow) ideally a transaction would be used, but then the received saved albums could have the same attributes but different ID (for albums with the same title, which might occur). that makes it hard to map the new IDs to the old for the creation of the rels
-      console.log('[Rescan] Saving new albums to DB')
+      setRescanMsg('Saving new albums to DB')
       var albumTitles = Object.keys(newData.albums)
       for (i = 0; i < albumTitles.length; i++) {
         var albumTitle = albumTitles[i]
@@ -262,7 +273,7 @@ function rescan () {
       }
       // Save new tracks and get their DB IDs
       // TODO (solve if rescan too slow) change to transaction(s)
-      console.log('[Rescan] Saving new tracks to DB')
+      setRescanMsg('Saving new tracks to DB')
       for (i = 0; i < newData.tracks.length; i++) {
         var track = newData.tracks[i]
         var savedTrack = sync.await(Track.save({
@@ -276,7 +287,7 @@ function rescan () {
         rescanState.tracksAdded.push(savedTrack)
       }
       // Save rels
-      console.log('[Rescan] Saving new rels to DB')
+      setRescanMsg('Saving new rels to DB')
       var tx = db.batch()
       for (i = 0; i < newData.rels.length; i++) {
         var rel = newData.rels[i]
@@ -294,6 +305,7 @@ function rescan () {
       }
       sync.await(tx.commit(sync.defer()))
 
+      setRescanMsg('All operations have finished successfully')
       rescanState.status = 'done'
     } catch (err) {
       rescanState.status = 'err'
@@ -329,7 +341,8 @@ app.put('/rescan', function (req, res) {
         newFiles: [],
         missingFiles: [],
         tracksAdded: [],
-        errMsg: null
+        errMsg: null,
+        detailedStatusMsg: null
       }
       res.status(200).send('Rescan request was submitted.')
       rescan()
@@ -347,7 +360,8 @@ app.get('/rescan-summary', function (req, res) {
     newFilesCount: rescanState.newFiles.length,
     missingFilesCount: rescanState.missingFiles.length,
     tracksAddedCount: rescanState.tracksAdded.length,
-    errMsg: rescanState.errMsg
+    errMsg: rescanState.errMsg,
+    detailedStatusMsg: rescanState.detailedStatusMsg
   }
   if (rescanStateSummary.newFilesCount > 0) {
     rescanStateSummary.tracksAddedPercentage = Math.floor(rescanStateSummary.tracksAddedCount/rescanStateSummary.newFilesCount)*100+'%'

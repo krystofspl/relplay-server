@@ -7,7 +7,6 @@ var config = {
     user: 'neo4j',
     pass: 'password'
   }),
-  //'/home/krystof/Code/School/graph_music_library/library/'
   libraryPath: '/mnt/G/Hudba/',
   appRoot: path.resolve(path.join(__dirname, '..'))
 }
