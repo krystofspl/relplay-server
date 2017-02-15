@@ -15,6 +15,12 @@ function checkStopCondition () {
   return rescanState.status === 'stop'
 }
 
+function stopRescan () {
+  rescanState.status = 'stopped'
+  rescanState.detailedStatusMsg = 'Received stop request, stopped scanning.'
+  console.log('[Rescan] ' + rescanState.detailedStatusMsg)
+}
+
 function setRescanMsg (msg) {
   rescanState.detailedStatusMsg = msg
   console.log('[Rescan] ' + msg)
@@ -43,6 +49,7 @@ function rescan () {
       setRescanMsg('Getting list of files from library directory')
       var files = sync.await(recursive(global.libraryPath, sync.defer()))
       files = files.map(file => {return file.replace(global.libraryPath, '')})
+      if (checkStopCondition()) { stopRescan(); return }
 
       setRescanMsg('Getting list of track paths from DB')
       var tracksQuery = ' \
@@ -51,6 +58,7 @@ function rescan () {
       '
       var trackPaths = sync.await(db.query(tracksQuery, sync.defer()))
       trackPaths = trackPaths[0].map(file => {return file.replace(global.libraryPath, '')})
+      if (checkStopCondition()) { stopRescan(); return }
 
       setRescanMsg('Getting albums from DB')
       var albumsQuery = ' \
@@ -70,6 +78,7 @@ function rescan () {
           albumsDB[e.title] = [albumNode]
         }
       }
+      if (checkStopCondition()) { stopRescan(); return }
 
       setRescanMsg('Getting artists from DB')
       var artistsQuery = ' \
@@ -86,7 +95,7 @@ function rescan () {
           id: e.id
         }
       }
-      if (checkStopCondition()) { rescanState.status = 'stopped'; return }
+      if (checkStopCondition()) { stopRescan(); return }
 
       // Get new and missing files from the lists
       setRescanMsg('Creating lists of new and missing files')
@@ -105,17 +114,17 @@ function rescan () {
       var missingFiles = trackPaths
       rescanState.newFiles = newFiles
       rescanState.missingFiles = missingFiles
-      if (checkStopCondition()) { rescanState.status = 'stopped'; return }
+      if (checkStopCondition()) { stopRescan(); return }
 
 
       // Temporarily create new files as tracks, albums, artists and relationships
-      // TODO? add checkStopCondition() inside the loop? this might take long
       var trackIdCounter = 0
       var albumIdCounter = 0
       var artistIdCounter = 0
       setRescanMsg('Creating in-memory representation of new data')
-      // TODO temp condition for testing i < 5000
-      for (i = 0; i < newFiles.length && i < 5000; i++) {
+      // TODO!!! temp condition for testing
+      for (i = 0; i < newFiles.length && i < 5; i++) {
+        if (checkStopCondition()) { stopRescan(); return }
         var filePath = newFiles[i]
         var currentFilePath = path.join(global.libraryPath, filePath)
 
@@ -134,7 +143,7 @@ function rescan () {
 
         // Create a temporary representation of the data
         var newTrack = {
-          tempId: 'temp'+trackIdCounter,
+          tempId: 'temp' + trackIdCounter,
           title: metadata.common.title || filePath.split(path.sep).reverse()[0].replace(/\.[^\/.]+$/, ''),
           duration: metadata.format.duration || 0.0,
           filePath: filePath,
@@ -228,7 +237,7 @@ function rescan () {
           })
         }
       }
-      if (checkStopCondition()) { rescanState.status = 'stopped'; return }
+      if (checkStopCondition()) { stopRescan(); return }
 
 
       // Save new entities to DB
