@@ -1,5 +1,6 @@
 var Album = require('../models/Album.js')
 var Artist = require('../models/Artist.js')
+var Label = require('../models/Label.js')
 var path = require('path')
 var fs = require('fs')
 var gm = require('gm')
@@ -11,6 +12,7 @@ app.get('/albums', function (req, res) {
     try {
       Album.compose(Artist, 'mainArtist', 'HAS_MAIN_ARTIST')
       Album.compose(Artist, 'artists', 'HAS_ARTIST', {many: true})
+      Album.compose(Label, 'labels', 'HAS_LABEL', {many: true})
       // TODO compose Genre throws cypher null pointer, bug on seraph-model's side?
 
       var albums = sync.await(Album.findAll(sync.defer()))
@@ -21,6 +23,11 @@ app.get('/albums', function (req, res) {
           album.artists = album.artists.map(artist => artist.id)
         } else {
           album.artists = []
+        }
+        if (album.labels) {
+          album.labels = album.labels.map(label => label.id)
+        } else {
+          album.labels = []
         }
       })
       // Get genres
@@ -54,7 +61,9 @@ app.get('/albums/:id', function (req, res) {
         OPTIONAL MATCH (album)-[:HAS_ARTIST*]->(artist:Artist) \
         WITH album, artist, mainArtist \
         OPTIONAL MATCH (album)-[:HAS_GENRE*]->(genre:Genre) \
-        RETURN album, ID(mainArtist) as mainArtist, collect(DISTINCT ID(artist)) as artists, collect(DISTINCT ID(genre)) as genres \
+        WITH album, artist, mainArtist, genre \
+        OPTIONAL MATCH (album)-[:HAS_LABEL*]->(label:Label) \
+        RETURN DISTINCT album, ID(mainArtist) as mainArtist, collect(ID(artist)) as artists, collect(ID(genre)) as genres, collect(ID(label)) as labels \
       '
       res.json(sync.await(db.query(query, {id: parseInt(req.params.id)}, sync.defer())))
     } catch (err) {
@@ -62,7 +71,6 @@ app.get('/albums/:id', function (req, res) {
       res.status(500).json(err)
     }
   })
-
 })
 
 app.get('/album-arts/:id', function (req, res) {
@@ -128,8 +136,10 @@ app.patch('/albums/:id', function (req, res) {
       var newMainArtist = null
       var newArtists = null
       var newGenres = null
+      var newLabels = null
 
       var request = req.body
+
       // Take attributes data from the request
       if (request.title) {nodeData.title = request.title}
       if (typeof request.inInbox !== 'undefined') {nodeData.inInbox = request.inInbox}
@@ -139,6 +149,7 @@ app.patch('/albums/:id', function (req, res) {
       if (request.mainArtist) {newMainArtist = request.mainArtist; delete request.mainArtist}
       if (request.artists) {newArtists = request.artists; delete request.artists}
       if (request.genres) {newGenres = request.genres; delete request.genres}
+      if (request.labels) {newLabels = request.labels; delete request.labels}
       // Update album if there's some data present
       var argsCount = Object.keys(nodeData).length
       if (argsCount >= 2) {
@@ -149,14 +160,17 @@ app.patch('/albums/:id', function (req, res) {
       }*/
 
       // Obtain the new album with relevant rels embedded
+      // TODO same query as in GET :id
       var query = ' \
-        MATCH (album:Album)-[rel]->(mainArtist:Artist) \
-        WHERE ID(album) = {id} AND (TYPE(rel) = "HAS_MAIN_ARTIST") \
+        MATCH (album:Album)-[:HAS_MAIN_ARTIST]->(mainArtist:Artist) \
+        WHERE ID(album) = {id} \
         WITH album, mainArtist \
         OPTIONAL MATCH (album)-[:HAS_ARTIST*]->(artist:Artist) \
         WITH album, artist, mainArtist \
         OPTIONAL MATCH (album)-[:HAS_GENRE*]->(genre:Genre) \
-        RETURN album, ID(mainArtist) as mainArtist, collect(DISTINCT ID(artist)) as artists, collect(DISTINCT ID(genre)) as genres \
+        WITH album, artist, mainArtist, genre \
+        OPTIONAL MATCH (album)-[:HAS_LABEL*]->(label:Label) \
+        RETURN DISTINCT album, ID(mainArtist) as mainArtist, collect(ID(artist)) as artists, collect(ID(genre)) as genres, collect(ID(label)) as labels \
       '
       result = sync.await(db.query(query, {id: parseInt(nodeData.id)}, sync.defer()))
       if (result.length < 1) {
@@ -164,7 +178,7 @@ app.patch('/albums/:id', function (req, res) {
       }
       result = result[0]
 
-      album = result.album // result is [{album:.., mainArtist: int, artists: int[], genres: int[]}]
+      album = result.album // result is [{album:.., mainArtist: int, artists: int[], ...}]
       if (result.mainArtist) {album.mainArtist = result.mainArtist}
       if (result.artists) {
         album.artists = result.artists
@@ -176,7 +190,11 @@ app.patch('/albums/:id', function (req, res) {
       } else {
         album.genres = []
       }
-
+      if (result.labels) {
+        album.labels = result.labels
+      } else {
+        album.labels = []
+      }
       // Update related entities if requested
       var tx = db.batch()
       // Update and set new mainArtist if present
@@ -207,6 +225,17 @@ app.patch('/albums/:id', function (req, res) {
         newGenres.forEach(genreId => {
           tx.relate(nodeData.id, 'HAS_GENRE', genreId)
           album.genres.push(genreId)
+        })
+      }
+      // Update and set new labels if present
+      if (newLabels) {
+        // Delete old label rels
+        tx.query('MATCH (album:Album)-[r:HAS_LABEL]->(Label) WHERE ID(album)={id} DELETE r', {id: parseInt(nodeData.id)})
+        // Add new label rels
+        album.labels = []
+        newLabels.forEach(labelId => {
+          tx.relate(nodeData.id, 'HAS_LABEL', labelId)
+          album.labels.push(labelId)
         })
       }
       sync.await(tx.commit(sync.defer()))

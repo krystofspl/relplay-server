@@ -63,7 +63,7 @@ app.delete('/genres/:id', function (req, res) {
       DELETE r, genre \
       '
       sync.await(db.query(query, {id: parseInt(req.params.id)}, sync.defer()))
-      res.json(200).end()
+      res.status(200).end()
     } catch (err) {
       console.log(err)
       res.status(500).json(err)
