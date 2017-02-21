@@ -75,9 +75,11 @@ app.get('/graphs/genres-albums-graph', (req, res) => {
 app.get('/graphs/labels-graph', (req, res) => {
   // Query for (label)<-[HAS_LABEL]<-(...)
   var query = '\
-    MATCH (label:Label) \
-    WITH (label) \
-    OPTIONAL MATCH (label)<-[:HAS_LABEL]-(n) \
-    RETURN ID(label) as label, collect(ID(n)) as rels \
+    MATCH (label)-[r:HAS_PARENT_LABEL]->(parentLabel:Label) \
+    RETURN ID(label) as from, ID(parentLabel) as to  \
   '
+  db.query(query, (err, result) => {
+    console.log(err)
+    res.json(result)
+  })
 })
