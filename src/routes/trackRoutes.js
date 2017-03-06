@@ -49,6 +49,11 @@ app.patch('/tracks/:id', function (req, res) {
 
       // Take attributes data from the request
       if (request.title) {nodeData.title = request.title}
+      if (request.trackNr) {nodeData.trackNr = request.trackNr}
+      if (request.diskNr) {nodeData.diskNr = request.diskNr}
+      if (request.playCount) {nodeData.playCount = request.playCount}
+      if (request.filePath) {nodeData.filePath = request.filePath}
+      // TODO albumId, lyrics
 
       // TODO add validation with response if failed
       // Take relationship data from the request, if present
