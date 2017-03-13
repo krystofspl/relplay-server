@@ -88,6 +88,11 @@ app.post('/playlists/generator', function (req, res) {
         }
       })
 
+      // Remove seed tracks from pool
+      newTrackIdsPool = newTrackIdsPool.filter(item => {
+        return seed.indexOf(item) === -1
+      })
+
       // Randomly select n values
       var selectedTrackIds = []
       var randomIndices = []
