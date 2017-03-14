@@ -7,6 +7,8 @@ app.post('/playlists/generator', function (req, res) {
     seed = _.castArray(request.seedTrackIds)
   }
   var usedTrackIds = _.castArray(_.compact(request.usedTrackIds)) // ensures no falsey values
+  console.log(seed)
+  console.log(usedTrackIds)
   var n = request.n || 3
   if (!seed) {
     res.status(400).send('Parameters seedTrackIds and usedTrackIds must be present.')
@@ -80,6 +82,7 @@ app.post('/playlists/generator', function (req, res) {
       WITH DISTINCT newTrack ORDER BY RAND() LIMIT 10 \
       RETURN COLLECT(ID(newTrack)) \
       ', 1])
+      // TODO Fallback - generate something randomly
 
       // Execute the queries, add to pool
       var i = 0
@@ -87,8 +90,8 @@ app.post('/playlists/generator', function (req, res) {
         var result = sync.await(db.query(queryItem[0], {seedTrackIds: seed, usedTrackIds: usedTrackIds}, sync.defer()))
         if (result && result.length) {
           var result = result[0]
-          console.log('Adding '+result.length*queryItem[1]+' items for query '+i)
-          console.log(result)
+          // console.log('Adding '+result.length*queryItem[1]+' items for query '+i)
+          // console.log(result)
           // Add items queryItem[1]-times
           for (let i = 0; i < queryItem[1]; i++) {
             newTrackIdsPool = newTrackIdsPool.concat(result)
@@ -98,9 +101,9 @@ app.post('/playlists/generator', function (req, res) {
       })
 
       // Remove seed tracks from pool
-      newTrackIdsPool = newTrackIdsPool.filter(item => {
+      newTrackIdsPool = _.compact(newTrackIdsPool.filter(item => {
         return seed.indexOf(item) === -1
-      })
+      }))
 
       // Randomly select n values
       var selectedTrackIds = []
@@ -119,7 +122,6 @@ app.post('/playlists/generator', function (req, res) {
           selectedTrackIds.push(newTrackIdsPool[generatedIndex])
         }
       }
-
       res.json(selectedTrackIds)
     } catch (err) {
       console.log(err)
