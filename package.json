@@ -12,6 +12,7 @@
     "express": "^4.14.0",
     "gm": "^1.23.0",
     "jsmediatags": "^3.3.0",
+    "lodash": "^4.17.4",
     "music-metadata": "^0.6.1",
     "node-uuid": "^1.4.7",
     "recursive-readdir": "^2.1.0",
