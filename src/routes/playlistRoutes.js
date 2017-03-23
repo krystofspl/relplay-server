@@ -1,4 +1,46 @@
+var Playlist = require('../models/Playlist.js')
+
 var _ = require('lodash')
+
+app.get('/playlists', function (req, res) {
+  var query = ' \
+  MATCH (playlist:Playlist) \
+  OPTIONAL MATCH (playlist)-[r:IS_IN_PLAYLIST]-(t:Track) \
+  WITH playlist, r.position as pos, ID(t) as track \
+  RETURN ID(playlist) as id, playlist.name as name, COLLECT({position: pos, id: track}) as tracks \
+  '
+  db.query(query, function (err, result) {
+    console.log(err)
+    res.json(result)
+  })
+})
+
+app.get('/playlists/:id', function (req, res) {
+  sync.fiber(function () {
+    try {
+      var playlistId = parseInt(req.params.id)
+      if (isNaN(playlistId) || !sync.await(Playlist.exists(playlistId, sync.defer()))) {
+        res.status(404).send('Playlist with specified ID doesn\'t exist')
+        return
+      }
+      var query = ' \
+      MATCH (playlist:Playlist) \
+      OPTIONAL MATCH (playlist)-[r:IS_IN_PLAYLIST]-(t:Track) \
+      WHERE ID(playlist) = {playlistId} \
+      WITH playlist, r.position as pos, ID(t) as track \
+      RETURN ID(playlist) as id, playlist.name as name, COLLECT({position: pos, id: track}) as tracks \
+      '
+      var result = sync.await(db.query(query, {playlistId: playlistId}, sync.defer()))
+      if (result && result.length) {
+        result = result[0]
+        res.json(result)
+      }
+    } catch (err) {
+      console.log(err)
+      res.status(500).json(err)
+    }
+  })
+})
 
 app.post('/playlists/generator', function (req, res) {
   var request = req.body
