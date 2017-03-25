@@ -42,6 +42,78 @@ app.get('/playlists/:id', function (req, res) {
   })
 })
 
+app.delete('/playlists/:id', function (req, res) {
+  sync.fiber(function () {
+    try {
+      var id = parseInt(req.params.id)
+      if (isNaN(id) || !sync.await(Playlist.exists(id, sync.defer()))) {
+        res.status(404).send('Playlist with specified ID doesn\'t exist')
+        return
+      }
+      var query = ' \
+      MATCH (playlist:Playlist) \
+      WHERE ID(playlist) = {id} \
+      WITH playlist \
+      OPTIONAL MATCH (playlist)-[r]-() \
+      DELETE r, playlist \
+      '
+      sync.await(db.query(query, {id: id}, sync.defer()))
+      res.status(200).end()
+    } catch (err) {
+      console.log(err)
+      res.status(500).json(err)
+    }
+  })
+})
+
+// Expects {name: String, trackIds: [track ids in order]}
+app.post('/playlists', function (req, res) {
+  sync.fiber(function () {
+    try {
+      var nodeData = {}
+      var playlist = null
+      var trackIds = []
+
+      var request = req.body
+      // Take attributes data from the request
+      if (request.name) {nodeData.name = request.name}
+      // TODO add validation with response if failed
+      // Take relationship data from the request, if present
+      if (request.trackIds) {trackIds = request.trackIds; delete request.trackIds}
+
+      // Create playlist
+      playlist = sync.await(Playlist.save(nodeData, sync.defer()))
+
+      // Obtain new genre along with relevant rels embedded
+      var query = ' \
+        MATCH (playlist:Playlist) \
+        WHERE ID(playlist) = {id} \
+        RETURN playlist \
+      '
+      result = sync.await(db.query(query, {id: parseInt(playlist.id)}, sync.defer()))
+      if (result.length < 1) {
+        throw 'ERR: No playlist with id ' + playlist.id
+      }
+      playlist = result[0]
+
+      // Create rels if requested
+      playlist.tracks = []
+      if (trackIds && trackIds.length) {
+        trackIds.forEach((trackId, index) => {
+          sync.await(db.relate(trackId, 'IS_IN_PLAYLIST', playlist.id, {position: index}, sync.defer()))
+          playlist.tracks.push({ id: trackId, position: index })
+        })
+      }
+
+      res.status(201).location(global.serverAddr + 'playlists/' + playlist.id).json(playlist)
+      return
+    } catch (err) {
+      console.log(err)
+      res.status(500).json(err)
+    }
+  })
+})
+
 app.post('/playlists/generator', function (req, res) {
   var request = req.body
   var seed = null
@@ -59,7 +131,7 @@ app.post('/playlists/generator', function (req, res) {
 
   var newTrackIdsPool = []
 
-  // Fill the pool with the tracks
+  // Fill the pool with the trackIds
   sync.fiber(() => {
     try {
       // Array of [query, multiplier(priority)]
@@ -142,7 +214,7 @@ app.post('/playlists/generator', function (req, res) {
         i++
       })
 
-      // Remove seed tracks from pool
+      // Remove seed trackIds from pool
       newTrackIdsPool = _.compact(newTrackIdsPool.filter(item => {
         return seed.indexOf(item) === -1
       }))
