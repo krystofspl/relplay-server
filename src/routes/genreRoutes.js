@@ -174,8 +174,8 @@ app.patch('/genres/:id', function (req, res) {
         // Add new parent genre rel; if null, just delete
         if (newParentGenre) { // is not null or undefined
           tx.relate(genre.id, 'HAS_PARENT_GENRE', newParentGenre)
-          genre.parentGenre = newParentGenre
         }
+        genre.parentGenre = newParentGenre
       }
       sync.await(tx.commit(sync.defer()))
 

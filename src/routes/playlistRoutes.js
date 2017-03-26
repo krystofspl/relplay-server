@@ -25,6 +25,8 @@ app.get('/playlists/:id', function (req, res) {
       }
       var query = ' \
       MATCH (playlist:Playlist) \
+      WHERE ID(playlist) = {playlistId} \
+      WITH playlist \
       OPTIONAL MATCH (playlist)-[r:IS_IN_PLAYLIST]-(t:Track) \
       WHERE ID(playlist) = {playlistId} \
       WITH playlist, r.position as pos, ID(t) as track \
@@ -135,7 +137,7 @@ app.patch('/playlists/:id', function (req, res) {
       // TODO add validation with response if failed
       // Take relationship data from the request, if present
       // Can be an empty array, in that case, tracks will be deleted
-      if (request.trackIds) {trackIds = request.trackIds; delete request.trackIds}
+      if ('trackIds' in request) {trackIds = request.trackIds; delete request.trackIds}
 
       // Update genre if there's ID and some data present
       var argsCount = Object.keys(nodeData).length
@@ -150,6 +152,8 @@ app.patch('/playlists/:id', function (req, res) {
       // TODO query same as in GET
       var query = ' \
         MATCH (playlist:Playlist) \
+        WHERE ID(playlist) = {playlistId} \
+        WITH playlist \
         OPTIONAL MATCH (playlist)-[r:IS_IN_PLAYLIST]-(t:Track) \
         WHERE ID(playlist) = {playlistId} \
         WITH playlist, r.position as pos, ID(t) as track \
