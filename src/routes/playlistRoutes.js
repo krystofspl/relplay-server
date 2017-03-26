@@ -114,6 +114,79 @@ app.post('/playlists', function (req, res) {
   })
 })
 
+// Expects {name: String, trackIds: [track ids in order]}
+app.patch('/playlists/:id', function (req, res) {
+  sync.fiber(function () {
+    try {
+      var playlistId = parseInt(req.params.id)
+      if (isNaN(playlistId) || !sync.await(Playlist.exists(playlistId, sync.defer()))) {
+        res.status(404).send('Playlist with specified ID doesn\'t exist')
+        return
+      }
+      var nodeData = {
+        id: playlistId
+      }
+      var playlist = null
+      var trackIds = 'nothing'
+
+      var request = req.body
+      // Take attributes data from the request
+      if (request.name) {nodeData.name = request.name}
+      // TODO add validation with response if failed
+      // Take relationship data from the request, if present
+      // Can be an empty array, in that case, tracks will be deleted
+      if (request.trackIds) {trackIds = request.trackIds; delete request.trackIds}
+
+      // Update genre if there's ID and some data present
+      var argsCount = Object.keys(nodeData).length
+      if (argsCount >= 2) {
+        sync.await(Playlist.update(nodeData, sync.defer()))
+      }/* else {
+        res.status(422).send('No parameters supplied')
+        return
+      }*/
+
+      // Obtain new genre along with relevant rels embedded
+      // TODO query same as in GET
+      var query = ' \
+        MATCH (playlist:Playlist) \
+        OPTIONAL MATCH (playlist)-[r:IS_IN_PLAYLIST]-(t:Track) \
+        WHERE ID(playlist) = {playlistId} \
+        WITH playlist, r.position as pos, ID(t) as track \
+        RETURN ID(playlist) as id, playlist.name as name, COLLECT({position: pos, id: track}) as tracks \
+      '
+      result = sync.await(db.query(query, {playlistId: playlistId}, sync.defer()))
+      if (result.length < 1) {
+        throw 'ERR: No playlist with id ' + playlistId
+      }
+
+      playlist = result[0]
+
+      // Update related entities if requested
+      var tx = db.batch()
+      // Update and set new tracks if present
+      if (trackIds !== 'nothing') { // has been set to array of length >= 0
+        // Delete old track rels
+        tx.query('MATCH (playlist:Playlist)-[r:IS_IN_PLAYLIST]-(track:Track) WHERE ID(genre)={playlistId} DELETE r', {playlistId: playlistId})
+        // Add new track rels; if null, just delete
+        if (trackIds.length) { // is non empty array
+          playlist.tracks = []
+          trackIds.forEach((trackId, index) => {
+            tx.relate(trackId, 'IS_IN_PLAYLIST', playlistId, { position: index })
+            playlist.tracks.push({ id: trackId, position: index })
+          })
+        }
+      }
+      sync.await(tx.commit(sync.defer()))
+
+      res.json(playlist)
+    } catch (err) {
+      console.log(err)
+      res.status(500).json(err)
+    }
+  })
+})
+
 app.post('/playlists/generator', function (req, res) {
   var request = req.body
   var seed = null

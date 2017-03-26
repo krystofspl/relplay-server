@@ -128,7 +128,7 @@ app.patch('/genres/:id', function (req, res) {
         id: parseInt(req.params.id)
       }
       var genre = null
-      var newParentGenre = null
+      var newParentGenre = 'nothing'
 
       var request = req.body
       // Take attributes data from the request
@@ -168,19 +168,18 @@ app.patch('/genres/:id', function (req, res) {
       // Update related entities if requested
       var tx = db.batch()
       // Update and set new parentGenre if present
-      if (newParentGenre) {
+      if (newParentGenre !== 'nothing') {
         // Delete old parent genre rel
         tx.query('MATCH (genre:Genre)-[r:HAS_PARENT_GENRE]->(genre2:Genre) WHERE ID(genre)={id} DELETE r', {id: parseInt(nodeData.id)})
         // Add new parent genre rel; if null, just delete
-        if (newParentGenre) {
+        if (newParentGenre) { // is not null or undefined
           tx.relate(genre.id, 'HAS_PARENT_GENRE', newParentGenre)
+          genre.parentGenre = newParentGenre
         }
-        genre.parentGenre = newParentGenre
       }
       sync.await(tx.commit(sync.defer()))
 
       res.json(genre)
-      return
     } catch (err) {
       console.log(err)
       res.status(500).json(err)
