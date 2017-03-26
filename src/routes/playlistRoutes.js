@@ -171,7 +171,7 @@ app.patch('/playlists/:id', function (req, res) {
       // Update and set new tracks if present
       if (trackIds !== 'nothing') { // has been set to array of length >= 0
         // Delete old track rels
-        tx.query('MATCH (playlist:Playlist)-[r:IS_IN_PLAYLIST]-(track:Track) WHERE ID(genre)={playlistId} DELETE r', {playlistId: playlistId})
+        tx.query('MATCH (playlist:Playlist)-[r:IS_IN_PLAYLIST]-(track:Track) WHERE ID(playlist)={playlistId} DELETE r', {playlistId: playlistId})
         // Add new track rels; if null, just delete
         if (trackIds.length) { // is non empty array
           playlist.tracks = []
