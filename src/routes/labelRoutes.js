@@ -16,12 +16,7 @@ app.get('/labels', function (req, res) {
         }
       } else {
         var result = sync.await(Label.findAll(sync.defer()))
-        if (result.length) {
-          res.json(result)
-          return
-        } else {
-          res.status(200).send('No labels found.')
-        }
+        res.json(result)
       }
     } catch (err) {
       console.log(err)

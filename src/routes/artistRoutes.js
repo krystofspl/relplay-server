@@ -19,3 +19,20 @@ app.get('/artists/:id', function (req, res) {
     }
   })
 })
+
+app.post('/artists', function (req, res) {
+  try {
+    var nodeData = {}
+    var request = req.body
+    if (request.name) {nodeData.name = request.name}
+    Artist.save(nodeData, function (err, result) {
+      if (err) throw err
+      if (result) {
+        res.json(result)
+      }
+    })
+  } catch (err) {
+    console.log(err)
+    res.status(500).end()
+  }
+})

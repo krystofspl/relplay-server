@@ -142,6 +142,7 @@ app.patch('/albums/:id', function (req, res) {
 
       // Take attributes data from the request
       if (request.title) {nodeData.title = request.title}
+      if (request.year) {nodeData.year = request.year}
       if (typeof request.inInbox !== 'undefined') {nodeData.inInbox = request.inInbox}
       // TODO more data will be here
       // TODO add validation with response if failed
