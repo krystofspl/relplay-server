@@ -1,3 +1,5 @@
+var _ = require('lodash')
+
 app.get('/graphs/artist-albums-graph', (req, res) => {
   var artist = req.query.artist
   if (!artist) {
@@ -81,5 +83,30 @@ app.get('/graphs/labels-graph', (req, res) => {
   db.query(query, (err, result) => {
     console.log(err)
     res.json(result)
+  })
+})
+
+app.get('/graphs/multi-graph', (req, res) => {
+  // Query for all rels between artist, album, label, genre
+  sync.fiber(function () {
+    try {
+      var query = '\
+        MATCH (m)-[r:SIMILAR_TO|HAS_LABEL|HAS_GENRE|HAS_PARENT_LABEL|HAS_PARENT_GENRE]->(n) \
+        RETURN TYPE(r) as relType, last(LABELS(m)) as fromType, last(LABELS(n)) as toType, ID(m) as from, ID(n) as to \
+      '
+      var graphData = sync.await(db.query(query, sync.defer()))
+      var albumIds = _.concat(_.filter(graphData, o => { return o.fromType === 'Album' }).map(o => o.from), _.filter(graphData, o => { return o.toType === 'Album' }).map(o => o.to))
+      var artistIds = _.concat(_.filter(graphData, o => { return o.fromType === 'Artist' }).map(o => o.from), _.filter(graphData, o => { return o.toType === 'Artist' }).map(o => o.to))
+      var query = '\
+        MATCH (album:Album)-[r:HAS_MAIN_ARTIST|HAS_ARTIST]-(artist:Artist) \
+        WHERE ID(album) IN {albumIds} AND ID(artist) IN {artistIds} \
+        RETURN TYPE(r) as relType, last(LABELS(album)) as fromType, last(LABELS(artist)) as toType, ID(album) as from, ID(artist) as to \
+      '
+      var graphData2 = sync.await(db.query(query, {albumIds: albumIds, artistIds: artistIds}, sync.defer()))
+      var graphData = _.concat(graphData, graphData2)
+      res.json(graphData)
+    } catch (err) {
+      console.log(err)
+    }
   })
 })
