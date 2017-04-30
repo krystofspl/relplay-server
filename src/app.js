@@ -5,7 +5,6 @@ var express = require('express')
 var fs = require('fs')
 var path = require('path')
 bodyParser = require('body-parser')
-var uuid = require('node-uuid')
 sync = require('synchronize')
 var corser = require('corser')
 
