@@ -3,7 +3,7 @@ RelPlay is a graph-based web music player and music library organizer. It lets y
 
 This repo contains the server part of the application, you can read more about the project and the server in the docs.
 
-[Docs](https://www.gitbook.com/book/krystofspl/relplay-docs/)
+[Docs](https://krystofspl.gitbooks.io/relplay-docs/content/) ([Editing](https://www.gitbook.com/book/krystofspl/relplay-docs/))
 
 [API specs](https://app.swaggerhub.com/apis/krystofspl/relplay-api/1.0.0)
 
